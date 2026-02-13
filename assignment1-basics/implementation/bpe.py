@@ -8,14 +8,10 @@ class BPETokenizerParams():
         self.vocab = vocab
         self.merges = merges
 
-def pre_tokenize(text: str) -> dict[bytes, int]:
-    pretok: list[str] = re.findall(PAT, text)
-    str_freqs: dict[str, int] = Counter(pretok)
-    bytes_freqs: dict[list[int], int] = None
-    for key, val in str_freqs.items():
-        key_seq: list[int] = list(key.encode("UTF-8"))
-        bytes_freqs[key_seq] = val
-    return bytes_freqs
+def pre_tokenize(corpus_chunk: str, split_pattern: str) -> dict[bytes, int]:
+    tokens = re.findall(split_pattern, corpus_chunk)
+    str_freqs = Counter(tokens)
+    return {s.encode("utf-8"): c for s, c in str_freqs.items()}
 
 def freq_tok_seq_in_pretokenization_dict(tok1: bytes, tok2: bytes, 
                                           pretok_dict: dict[list[int], int]) -> int:
