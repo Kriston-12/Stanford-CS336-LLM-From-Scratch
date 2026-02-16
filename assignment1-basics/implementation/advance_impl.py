@@ -52,10 +52,10 @@ class BPEDoublyLinkedList:
         node.next.prev = node.prev
         node.prev = node.next = None 
     
-    def merge_with_next(self, left: _Node) -> _Node:
+    def merge_with_next(self, left: _Node, new_id: int) -> _Node:
         assert left.next is not None, "Left node must have a next node to merge with"
         right = left.next
-        left.val = left.val + right.val
+        left.val = new_id
         self._unlink(right)
         return left
 
@@ -152,36 +152,39 @@ class BPETrainer:
                 pair_freqs[(node.val, node.next.val)] += wordId_freqs[i]
                 pair_position_map[(node.val, node.next.val)].add((i, node))
                 node = node.next
-        heap: list[tuple[int, tuple[int, int]]] = [(-freq, pair) for pair, freq in pair_freqs.items()]
+        heap: list[tuple[int, bytes, tuple[int, int]]] = [(-freq, [-b for b in (self.vocab[pair[0]] + self.vocab[pair[1]])], pair) for pair, freq in pair_freqs.items()]
         heapq.heapify(heap)
 
         for i in range(num_merges):
             if not heap:
                 break
-            neg_f, pair = heapq.heappop(heap)
-            if -neg_f != pair_freqs[pair]: # stale pair, skip
+            neg_f, _, pair = heapq.heappop(heap)
+            if -neg_f != pair_freqs[pair]: # stale pair, skip. 比如说开始 右 (X A B Y), (A, B)频率是100. merge (A, B) -> Z. AB 频率最高是(100), (X A) 频率(50), AB被merge之后，heap中(X, A) 变成了 (X, AB). 但是heap中还有 (X, A), 所以我们需要判断如果pair_freqs[pair] != -neg_f, 说明这个pair已经被merge过了，频率已经更新了，但是heap中还没有更新，所以这个pair是stale的，我们需要跳过它。
                 continue
             self.vocab[256 + i] = self.vocab[pair[0]] + self.vocab[pair[1]]
             self.merge.append(pair)
             pair_freqs[pair] = 0
             new_pair_counter: dict[tuple[int, int], int] = Counter()
             for wordId, node in pair_position_map[pair]:
-                word_templates[wordId].merge_with_next(node)
+                left_old, right_old = pair
+                word_templates[wordId].merge_with_next(node, 256 + i)
                 pair_freq = wordId_freqs[wordId]
-                if node.prev is not None:
+                if node.prev != word_templates[wordId]._node: # node.prev is not the sentinel
                     left, right = left_pair = (node.prev.val, node.val) # node.val has already been updated here 
                     pair_freqs[left_pair] -= pair_freq
+                    pair_position_map[(left_old, right_old)].remove((wordId, node.prev)) 
                     pair_position_map[(left, right)].add((wordId, node.prev))
                     pair_freqs[(left, right)] += pair_freq
                     new_pair_counter[(left, right)] += pair_freq
-                if node.next is not None:
+                if node.next != word_templates[wordId]._node: # node.next is not the sentinel
                     left, right = right_pair = (node.val, node.next.val)
                     pair_freqs[right_pair] -= pair_freq
+                    pair_position_map[(left_old, right_old)].remove((wordId, node))
                     pair_position_map[(left, right)].add((wordId, node))
                     pair_freqs[(left, right)] += pair_freq
                     new_pair_counter[(left, right)] += pair_freq
             for new_pair, freq in new_pair_counter.items():
-                heapq.heappush(heap, (-freq, new_pair))
+                heapq.heappush(heap, (-freq, [-b for b in (self.vocab[new_pair[0]] + self.vocab[new_pair[1]])], new_pair))
 
 
         
