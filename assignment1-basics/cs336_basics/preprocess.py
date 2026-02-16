@@ -52,15 +52,14 @@ PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s
 def pre_tokenize(
     corpus_chunk: str,
     split_pattern: str
-    ) -> dict[bytes, int]:
+    ) -> dict[tuple[int, ...], int]:
     tokens: list[str] = re.findall(split_pattern, corpus_chunk)
     str_freqs: dict[str, int] = Counter(tokens)
-
-    return {s.encode("utf-8"): c for s, c in str_freqs.items()}
+    return {tuple(s.encode("utf-8")): c for s, c in str_freqs.items()}
 
 def run_worker_pre_tokenize(
     corpus_chunk: str,
-    ) -> dict[bytes, int]:
+    ) -> dict[tuple[int, ...], int]:
     return pre_tokenize(corpus_chunk, PAT)
 
 def preprocess(
