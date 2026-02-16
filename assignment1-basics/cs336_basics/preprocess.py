@@ -1,5 +1,5 @@
 import os
-from typing import BinaryIO
+from typing import BinaryIO, Iterable
 import regex as re
 from collections import Counter
 from multiprocessing import Pool
@@ -45,7 +45,7 @@ def find_chunk_boundaries(
                 break
             initial_boundary += mini_chunk_len
 
-        return chunk_boundaries
+    return chunk_boundaries
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -60,9 +60,8 @@ def pre_tokenize(
 
 def run_worker_pre_tokenize(
     corpus_chunk: str,
-    split_pattern: str
     ) -> dict[bytes, int]:
-    return pre_tokenize(corpus_chunk, split_pattern)
+    return pre_tokenize(corpus_chunk, PAT)
 
 def preprocess(
     num_processes: int, 
@@ -70,18 +69,18 @@ def preprocess(
     split_tokens: bytes
     ) -> dict[bytes, int]:
     chunk_boundaries = None
-    file: BinaryIO = os.read(file_path, "br")
+    file: BinaryIO = open(file_path, "rb")
     chunk_boundaries = find_chunk_boundaries(file, num_processes, split_tokens)
     
     total_workers = len(chunk_boundaries)
     token_chunks: list[str] = []
-    for start, end in zip(chunk_boundaries, chunk_boundaries[1:]):
+    for start, end in zip(chunk_boundaries[:-1], chunk_boundaries[1:]):
         file.seek(start)
         token_chunks.append(file.read(end - start).decode("utf-8", errors="ignore"))
 
     total_token_map: dict[bytes, int] = Counter()
     with Pool(processes=total_workers) as pool:
-        for token_map in pool.imap_unordered(run_worker_pre_tokenize, [(chunk, PAT) for chunk in token_chunks], chunksize=1):
+        for token_map in pool.imap_unordered(run_worker_pre_tokenize, token_chunks, chunksize=1):
             total_token_map.update(token_map)
     
     return dict(total_token_map)
