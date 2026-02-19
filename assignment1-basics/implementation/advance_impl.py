@@ -93,6 +93,8 @@ class _ReverseLexOrderPair:
 
 
 
+
+
 def find_chunk_boundaries(
     file: BinaryIO,
     desired_num_chunks: int,
@@ -153,27 +155,24 @@ def _pre_tokenize_worker(
     # Split on special tokens *before* applying PAT, so merges cannot occur across the
     # text boundaries delimited by special tokens.
     # Important: special tokens may contain regex metacharacters (e.g., '|'), so escape them.
+    # Reference-style: split on special tokens first, then apply PAT within each piece.
+    # Important: use a *capturing* group so special tokens are preserved as separate pieces.
     pieces: list[str]
+    special_to_id = {tok: i for i, tok in enumerate(special_tokens)}
     if special_tokens:
-        # Reference-style: split on special tokens first, then apply PAT within each piece.
-        # Use a non-capturing group so the tokens themselves are not included in output.
-        special_pat = re.compile("(?:" + "|".join(re.escape(t) for t in special_tokens) + ")")
+        special_pat = re.compile("(" + "|".join(re.escape(t) for t in special_tokens) + ")")
         pieces = special_pat.split(corpus_chunk)
     else:
         pieces = [corpus_chunk]
 
     str_freqs: Counter[str] = Counter()
-    # Count special tokens separately (so they are atomic ids) and PAT tokens within text spans.
-    # We need to count occurrences of specials in the original chunk.
     special_freqs: Counter[str] = Counter()
-    if special_tokens:
-        # Count raw occurrences by scanning with a compiled pattern.
-        count_pat = re.compile("|".join(re.escape(t) for t in special_tokens))
-        for m in count_pat.finditer(corpus_chunk):
-            special_freqs[m.group(0)] += 1
 
     for piece in pieces:
         if not piece:
+            continue
+        if piece in special_to_id:
+            special_freqs[piece] += 1
             continue
         for m in PAT.finditer(piece):
             str_freqs[m.group(0)] += 1
@@ -191,7 +190,6 @@ def _pre_tokenize_worker(
     # Special tokens should be atomic IDs, *not* their raw byte sequences.
     # In the reference implementation, special tokens are assigned ids first (0..),
     # followed by the 256 single-byte tokens.
-    special_to_id = {tok: i for i, tok in enumerate(special_tokens)}
     for tok, c in special_freqs.items():
         out[(special_to_id[tok],)] = out.get((special_to_id[tok],), 0) + c
     return out
@@ -270,6 +268,7 @@ class BPETrainer:
         ]
         heapq.heapify(heap)
 
+
         # The adapter passes num_merges=os.cpu_count(); ignore that and derive merges from vocab_size.
         # Contract: vocab_size includes special tokens.
         target_merges = max(0, self.vocab_size - len(self.vocab))
@@ -286,6 +285,7 @@ class BPETrainer:
                     break
             else:
                 break
+
             merged_bytes = self.vocab[pair[0]] + self.vocab[pair[1]]
 
 
