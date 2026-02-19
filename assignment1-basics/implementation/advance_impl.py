@@ -92,9 +92,6 @@ class _ReverseLexOrderPair:
         return isinstance(other, _ReverseLexOrderPair) and self.pair == other.pair
 
 
-
-
-
 def find_chunk_boundaries(
     file: BinaryIO,
     desired_num_chunks: int,
