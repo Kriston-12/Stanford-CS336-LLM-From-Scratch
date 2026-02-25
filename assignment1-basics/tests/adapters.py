@@ -602,3 +602,6 @@ def run_train_bpe(
     # Our BPETrainer derives the number of merges from vocab_size.
     vocab, merges = trainer.train(num_merges=vocab_size)
     return vocab, merges
+
+
+

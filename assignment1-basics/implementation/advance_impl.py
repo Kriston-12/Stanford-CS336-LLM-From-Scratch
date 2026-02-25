@@ -376,7 +376,7 @@ if __name__ == "__main__":
     # print(pieces)  # ['Hi', '<|endoftext|>', 'There']
     corpus = f"Hello, world! This is a test. <|endoftext|>"
     special_pat = re.compile("(" + re.escape("<|endoftext|>") + ")")
-    pieces = special_pat.split(corpus)
+    pieces = special_pat.split(corpus) # ['Hello, world! This is a test. ', '<|endoftext|>', '']
     print(pieces)
     # 上下等价
     pieces = re.split("(" + re.escape("<|endoftext|>") + ")", corpus)
@@ -384,4 +384,3 @@ if __name__ == "__main__":
     
     pat_pieces = PAT.findall(corpus)
     print(pat_pieces)
-    # print([PAT.findall(piece) for piece in pieces])
