@@ -589,4 +589,19 @@ def run_train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    raise NotImplementedError
+    # Delegate to the student's BPE implementation.
+    from implementation.advance_impl import BPETrainer
+
+    trainer = BPETrainer(
+        input_path=str(input_path),
+        vocab_size=vocab_size,
+        special_tokens=special_tokens,
+        **kwargs,
+    )
+
+    # Our BPETrainer derives the number of merges from vocab_size.
+    vocab, merges = trainer.train(num_merges=vocab_size)
+    return vocab, merges
+
+
+
