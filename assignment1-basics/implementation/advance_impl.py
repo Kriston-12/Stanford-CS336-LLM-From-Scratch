@@ -137,10 +137,6 @@ def find_chunk_boundaries(
             file.seek(initial_pos)
 
     boundaries[-1] = file_len
-    # Ensure monotonicity (defensive for small files / many chunks).
-    for i in range(1, len(boundaries)):
-        if boundaries[i] < boundaries[i - 1]:
-            boundaries[i] = boundaries[i - 1]
     return boundaries
 
 PAT = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
@@ -157,6 +153,8 @@ def _pre_tokenize_worker(
     pieces: list[str]
     special_to_id = {tok: i for i, tok in enumerate(special_tokens)}
     if special_tokens:
+        # "(" + ")" 用来捕获分割后的special token，使其也作为分割结果的一部分返回
+        # 如果没有 "()", split会丢弃分割符，而我们需要保留special token作为一个独立的piece，以便后续统计它们的频率并正确地将它们映射到vocab id
         special_pat = re.compile("(" + "|".join(re.escape(t) for t in special_tokens) + ")")
         pieces = special_pat.split(corpus_chunk)
     else:
@@ -210,7 +208,7 @@ def _preprocess(
     with Pool(processes=total_workers) as pool:
         for token_map in pool.starmap(_pre_tokenize_worker, [(chunk, special_token_strs) for chunk in token_chunks], chunksize=1):
             word_freqs.update(token_map)
-    return dict(word_freqs)
+    return word_freqs
 
 class BPETrainer:
 
@@ -274,17 +272,12 @@ class BPETrainer:
         sentinel_val = 0
         merges_done = 0
         while merges_done < target_merges and heap:
-            # Pop until we find a non-stale entry.
-            while heap:
-                neg_f, _, pair = heapq.heappop(heap)
-                freq = -neg_f
-                if pair_freqs.get(pair, 0) == freq and freq > 0:
-                    break
-            else:
-                break
+            neg_f, _, pair = heapq.heappop(heap)
+            freq = -neg_f
+            if pair_freqs.get(pair, 0) != freq:
+                continue
 
             merged_bytes = self.vocab[pair[0]] + self.vocab[pair[1]]
-
 
             # Allocate the next available vocab id contiguously.
             new_id = len(self.vocab)
@@ -292,8 +285,13 @@ class BPETrainer:
             self.merge_ids.append(pair)
             merges_done += 1
 
-            # Snapshot positions to avoid mutating a set while iterating it.
-            positions = list(pair_position_map[pair])
+            # # Snapshot positions to avoid mutating a set while iterating it.
+            # positions = list(pair_position_map[pair])
+            # Deterministic order: pair_position_map stores occurrences in a set, whose
+            # iteration order can vary across runs. The order matters because merging one
+            # occurrence can invalidate or shift neighboring occurrences within the same
+            # word. Sort by (wordId, id(node)) to make behavior stable.
+            positions = sorted(pair_position_map[pair], key=lambda wn: (wn[0], id(wn[1])))
 
             to_remove: dict[tuple[int, int], list[tuple[int, _Node]]] = collections.defaultdict(list)
             to_add: dict[tuple[int, int], list[tuple[int, _Node]]] = collections.defaultdict(list)
@@ -369,9 +367,21 @@ class BPETrainer:
         return self.vocab, merges_bytes
 
 
-        
+if __name__ == "__main__":
 
-
-
-
-
+    # special_pat = re.compile("(" + re.escape("<|endoftext|>") + ")")
+    # print(special_pat) # re.compile("(<\\|endoftext\\|>)")
+    # print(re.escape("<|endoftext|>"))
+    # pieces = special_pat.split("Hi<|endoftext|>There")
+    # print(pieces)  # ['Hi', '<|endoftext|>', 'There']
+    corpus = f"Hello, world! This is a test. <|endoftext|>"
+    special_pat = re.compile("(" + re.escape("<|endoftext|>") + ")")
+    pieces = special_pat.split(corpus)
+    print(pieces)
+    # 上下等价
+    pieces = re.split("(" + re.escape("<|endoftext|>") + ")", corpus)
+    print(pieces)
+    
+    pat_pieces = PAT.findall(corpus)
+    print(pat_pieces)
+    # print([PAT.findall(piece) for piece in pieces])
