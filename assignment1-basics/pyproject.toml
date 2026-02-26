@@ -22,6 +22,7 @@ dependencies = [
     "tuna",
     "tqdm",
     "datasets",
+    "scalene<1.5.40",
 ]
 
 [build-system]
