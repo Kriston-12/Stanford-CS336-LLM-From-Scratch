@@ -1,7 +1,12 @@
 import heapq
+import json
 from typing import Iterable, Iterator, Tuple, Optional
+
 import regex as re
+
+
 PAT = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
+
 class _Node: # vocab[vocab_id] = val, vocab_id是为了我们找到merge之后保存对应的token id, 方便后续encode成token id list
     __slots__ = ['val', 'prev', 'next']
     def __init__(self, val: int,  prev = None, next = None):
@@ -27,6 +32,7 @@ class EncoderDoublyLinkedList:
         last_added_node = self._node.prev
         last_added_node.next = new_node
         self._node.prev = new_node # update the last added node to be the new node
+        return new_node
         
     def unlink(self, node: _Node):
         node.prev.next = node.next
@@ -36,6 +42,12 @@ class EncoderDoublyLinkedList:
     def merge_with_next(self, left: _Node, merged_val:int):
         left.val = merged_val
         self.unlink(left.next)
+
+    def __iter__(self):
+        cur = self._node.next
+        while cur != self._node:
+            yield cur
+            cur = cur.next
 
 class Tokenizer:
     def __init__(self, vocab: dict[int, bytes], 
@@ -48,20 +60,48 @@ class Tokenizer:
         self.bytes_offset = len(self.special_tokens)
         self.merge_offset = self.bytes_offset + 256
 
-        self.special_patterns = re.compile("(" + '|'.join(re.escape(tok) for tok in self.special_tokens) + ")") if self.special_tokens else None
+        # In the tests, vocab is dict[token_id, bytes], where the bytes are the
+        # *original bytes* (the test fixture already inverted GPT-2's bytes<->unicode
+        # remapping). So our tokenizer should operate directly on raw bytes.
+        self.bytes_to_id: dict[bytes, int] = {v: k for k, v in self.vocab.items()}
 
-        bytes_to_id = {v: k for k, v in self.vocab.items()}
+        # Important: handle overlapping special tokens by matching the longest first.
+        # Example: "<|endoftext|>" vs "<|endoftext|><|endoftext|><|endoftext|>".
+        if self.special_tokens:
+            self.special_tokens = sorted(self.special_tokens, key=len, reverse=True)
+            self.special_patterns = re.compile(
+                "(" + "|".join(re.escape(tok) for tok in self.special_tokens) + ")"
+            )
+            self.special_to_id: dict[str, int] = {
+                tok: self.bytes_to_id[tok.encode("utf-8")]
+                for tok in self.special_tokens
+            }
+        else:
+            self.special_patterns = None
+            self.special_to_id = {}
+
+        # rank[(id_left,id_right)] = merge_index
         self.rank: dict[Tuple[int, int], int] = {}
-        for i, merge in enumerate(self.merges):
-            token_id1 = bytes_to_id[merge[0]]
-            token_id2 = bytes_to_id[merge[1]]
-            self.rank[(token_id1, token_id2)] = i
+        for i, (b1, b2) in enumerate(self.merges):
+            self.rank[(self.bytes_to_id[b1], self.bytes_to_id[b2])] = i
 
     @classmethod
     def from_files(cls, vocab_filepath: str, 
                    merges_filepath: str, 
                    special_tokens: list[str] | None = None):
-        pass
+        vocab: dict[int, bytes] = {}
+        merges: list[Tuple[bytes, bytes]] = []
+        with open(vocab_filepath, "rb") as f:
+            # vocab is a json file
+            vocab = json.load(f)
+        with open(merges_filepath, "rb") as f:
+            for line in f:
+                cleaned = line.rstrip()
+                if cleaned and len(cleaned.split(" ")) == 2:
+                    # Keep as bytes (tests provide merges as bytes; if you load raw GPT2 merges here, you must convert)
+                    a, b = cleaned.split(" ")
+                    merges.append((a.encode("utf-8"), b.encode("utf-8")))
+        return cls(vocab, merges, special_tokens)
     
     # 首先要明确在我的bpe的实现中，vocab[0...len(special_tokens)-1]是special tokens, 它们对应b'0', b'1', ..., b'{len(special_tokens)-1}'
     # vocab[256 + i] = merge for merge in merges[i], 这意味着merges[i]对应的token id是vocab[256 + i]
@@ -86,31 +126,48 @@ class Tokenizer:
     #   4.2 否则说明这个pair是一个merge，找到对应
     def encode(self, text: str) -> list[int]:
         if self.special_patterns:
-            words = self.special_patterns.split(text)
+            pieces = self.special_patterns.split(text)
         else:
-            words = [text]
+            pieces = [text]
         
-        output_token_ids: list[int] = []
-        for word in words:
-            if word in self.special_tokens:
-                output_token_ids.append(self.special_tokens.index(word))
-            else:
-                output_token_ids.extend(self._encode_single(word.encode("utf-8")))
-        return output_token_ids
+        out: list[int] = []
+        for piece in pieces:
+            if not piece:
+                continue
+            # Special tokens are appended to vocab (by tests) if missing.
+            if piece in self.special_tokens:
+                out.append(self.special_to_id[piece])
+                continue
+
+            for m in PAT.finditer(piece):
+                raw = m.group(0).encode("utf-8")
+                out.extend(self._encode_single(raw))
+        return out
     
     def _encode_single(self, text: bytes) -> list[int]:
-        token_ids = [self.bytes_offset + b for b in text]
-        if not token_ids:
+        if not text:
             return []
+
+        # Base encoding: one token per raw byte.
+        # IMPORTANT: do not assume any particular id layout; look up ids by bytes.
+        token_ids = [self.bytes_to_id[bytes([b])] for b in text]
+        if len(token_ids) == 1:
+            return token_ids
         
         dll = EncoderDoublyLinkedList(token_ids)
-        heap: list[Tuple[int, _Node]] = [] # (rank, id(node), node)
+        # (rank, tie_breaker, node). tie_breaker avoids comparing _Node objects.
+        heap: list[Tuple[int, int, _Node]] = []
         def try_push(node: _Node):
+            if node is None or node is dll._node:
+                return
             next_node = node.next
+            if next_node is None or next_node is dll._node:
+                return
             pair = (node.val, next_node.val)
-            if pair in self.rank:
-                rank = self.rank[pair]
-                heapq.heappush(heap, (rank, node))
+            rank = self.rank.get(pair)
+            if rank is None:
+                return
+            heapq.heappush(heap, (rank, id(node), node))
 
         cur_node = dll._node.next
         while cur_node.next != dll._node:
@@ -118,12 +175,21 @@ class Tokenizer:
             cur_node = cur_node.next
         
         while heap:
-            rank, node = heapq.heappop(heap)
+            rank, _, node = heapq.heappop(heap)
+            # stale: node was unlinked
+            if node.prev is None or node.next is None:
+                continue
             next_node = node.next
+            if next_node is None or next_node is dll._node:
+                continue
             pair = (node.val, next_node.val)
-            if pair not in self.rank or next_node == dll._node or next_node is None: 
-                continue # stale
-            dll.merge_with_next(node, rank + self.merge_offset)
+            if self.rank.get(pair) != rank:
+                continue
+
+            # Compute merged token id by bytes: vocab[new] = vocab[left] + vocab[right]
+            merged_bytes = self.vocab[node.val] + self.vocab[next_node.val]
+            new_id = self.bytes_to_id[merged_bytes]
+            dll.merge_with_next(node, new_id)
             if node.prev != dll._node:
                 try_push(node.prev)
             if node.next != dll._node:
@@ -133,7 +199,10 @@ class Tokenizer:
 
 
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
-        pass
+        for text in iterable:
+            yield from self.encode(text)
 
     def decode(self, ids: list[int]) -> str:
-        return b"".join(self.vocab[id] for id in ids).decode("utf-8", errors="replace")
+        # The vocab stores raw bytes; concatenating them reproduces the original
+        # UTF-8 byte stream for normal text.
+        return b"".join(self.vocab[i] for i in ids).decode("utf-8", errors="replace")
