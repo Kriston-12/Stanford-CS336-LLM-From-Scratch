@@ -559,7 +559,11 @@ def get_tokenizer(
     Returns:
         A BPE tokenizer that uses the provided vocab, merges, and special tokens.
     """
-    raise NotImplementedError
+    # Delegate to the student's BPE implementation.
+    from implementation.tokenizer import Tokenizer
+
+    tokenizer = Tokenizer(vocab=vocab, merges=merges, special_tokens=special_tokens)
+    return tokenizer
 
 
 def run_train_bpe(

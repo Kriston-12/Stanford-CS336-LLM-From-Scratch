@@ -41,11 +41,11 @@ def get_tokenizer_from_vocab_merges_path(
     merges_path: str | os.PathLike,
     special_tokens: list[str] | None = None,
 ):
-    gpt2_byte_decoder = {v: k for k, v in gpt2_bytes_to_unicode().items()}
+    gpt2_byte_decoder = {v: k for k, v in gpt2_bytes_to_unicode().items()} # dict[unicode_char, byte_value_integer]
     with open(vocab_path) as vocab_f:
-        gpt2_vocab = json.load(vocab_f)
+        gpt2_vocab = json.load(vocab_f) # gpt2_vocab, key是unicode char, value是token id. 但是我的BPE的vocab是dict[token_id, bytes], 莫名其妙的转换
     gpt2_bpe_merges = []
-    with open(merges_path) as f:
+    with open(merges_path) as f: # 这里正常处理merges
         for line in f:
             cleaned_line = line.rstrip()
             if cleaned_line and len(cleaned_line.split(" ")) == 2:
@@ -53,12 +53,12 @@ def get_tokenizer_from_vocab_merges_path(
     # The GPT-2 tokenizer uses a remapped unicode encoding for bytes. Let's
     # just return the original bytes, so we don't force students to use
     # any particular encoding scheme.
-    vocab = {
+    vocab = { # 这里又把之前dict[unicode_char, token_id]的gpt2_vocab通过gpt2_byte_decoder转换成dict[token_id, bytes]的vocab, 非常奇怪的处理
         gpt2_vocab_index: bytes([gpt2_byte_decoder[token] for token in gpt2_vocab_item])
         for gpt2_vocab_item, gpt2_vocab_index in gpt2_vocab.items()
     }
     # If any of the special tokens don't exist in the vocab, append them to the vocab.
-    if special_tokens:
+    if special_tokens: # 在结尾append special tokens, 但是我的BPE是在开头对应special tokens，过了tests，很奇怪，这里为什么要这样？
         for special_token in special_tokens:
             byte_encoded_special_token = special_token.encode("utf-8")
             if byte_encoded_special_token not in set(vocab.values()):

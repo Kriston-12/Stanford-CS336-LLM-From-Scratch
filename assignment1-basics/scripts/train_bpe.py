@@ -157,5 +157,46 @@ def main_profiled() -> None:
     with profile(args.profile, args.profile_sort, args.profile_top):
         _train(args.input, args.vocab_size, args.num_chunks)
 
-if __name__ == "__main__":
+
+def perf_main():
+    # Run this script with:
+    # perf record -F 99 -g -- uv run -X python scripts/train_bpe.py -i data/openwebtext_50k.txt -v 32000 -p artifacts/openwebtext_50k/profile.prof
+    # perf report
+    # to generate flame graphs:
+    # perf script -i perf.data > out.perf
+    # FlameGraph/stackcollapse-perf.pl out.perf > out.folded
+    # FlameGraph/flamegraph.pl out.folded > flame.svg
+
+    # use explorer.exe to observe flame.svg on Windows
+    # "$(wslpath -w flame.svg)" this command can convert the flame.svg path to Windows format, which can be opened by explorer.exe
+    # explorer.exe $(wslpath -w flame.svg)
+    
     main_profiled()
+
+def scalene_main():
+    # Run this script with:
+    # uv run scalene --html --outfile artifacts/scalene_openwebtext.html \
+    #     scripts/train_bpe.py -i data/openwebtext_50k.txt -v 32000 -n 8
+    # explorer.exe "$(wslpath -w artifacts/scalene_openwebtext.html)"
+    # Then open the generated HTML report in artifacts/scalene_profile/ to analyze the performance.
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "-i", "--input",
+        type=Path,
+        required=True,
+        help="Path to training text (must contain <|endoftext|> delimiters)",
+    )
+    ap.add_argument("-v", "--vocab-size", type=int, default=10_000)
+    ap.add_argument("-n", "--num-chunks", type=int, default=os.cpu_count() or 8)
+    ap.add_argument("-o", "--out-dir", type=Path, default=Path("artifacts") / "scalene_profile", help="Directory to write Scalene profile results")
+    
+    args = ap.parse_args()
+
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    _train(str(args.input), args.vocab_size, args.num_chunks)
+
+if __name__ == "__main__":
+    # main_profiled()
+    # perf_main()
+    scalene_main()
