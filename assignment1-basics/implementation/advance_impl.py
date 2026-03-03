@@ -53,6 +53,10 @@ class BPEDoublyLinkedList:
         node = self._node
         return self._insert_between(val, node.prev, node)
     
+    # example of use: 
+    # insert 1. sentinel - 1 - sentinel, sentinel.prev = 1, sentinel.next = 1
+    # insert 2. 2.prev = sentinel.prev = 1. 2.right = sentinel
+    #           sentinel.left = 2 
     def _insert_between(self, val: int, left: _Node, right: _Node) -> _Node:
         node = _Node(val=val, prev=left, next=right)
         left.next = node
@@ -65,6 +69,7 @@ class BPEDoublyLinkedList:
         node.next.prev = node.prev
         node.prev = node.next = None 
     
+    # method name gives that new_id = left.val + right.val below 
     def merge_with_next(self, left: _Node, new_id: int) -> _Node:
         assert left.next is not None, "Left node must have a next node to merge with"
         right = left.next
@@ -136,7 +141,6 @@ def find_chunk_boundaries(
                 break
             file.seek(initial_pos)
 
-    boundaries[-1] = file_len
     return boundaries
 
 PAT = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
@@ -195,6 +199,8 @@ def _preprocess(
     split_tokens: list[bytes]
     ) -> dict[tuple[int, ...], int]:
     chunk_boundaries = None
+    # find_chunk_boundaries是在special_tokens边界上划分chunks
+    # 但是不包括special_tokens themselves, 
     chunk_boundaries = find_chunk_boundaries(corpus, num_processes, split_tokens)
     
     total_workers = len(chunk_boundaries)
@@ -206,12 +212,18 @@ def _preprocess(
     word_freqs: dict[tuple[int, ...], int] = Counter()
     special_token_strs = [t.decode("utf-8") for t in split_tokens]
     with Pool(processes=total_workers) as pool:
+        # better use imap_unordered here to avoid waiting for stragglers
+        # starmap能够保证顺序 
+        # 底层之所以能保证顺序，不是因为子进程按顺序执行，而是靠 索引编号（Task ID）：
+        # 打标签：主进程分发任务时，给每个任务打上索引（例如：Task 0, Task 1, Task 2...）。
+        # 异步执行：子进程从队列里抢任务。可能 Task 2 处理的是一个很小的文本块，先算完了；Task 0 处理的是个大块，还没算完。
+        # 重新排序：结果返回到主进程后，MapResult 对象会维护一个缓存。即使 Task 2 的结果先回来，它也会等到 Task 0 和 Task 1 都回来后，再按照 0, 1, 2 的顺序把结果通过迭代器吐给你。
+        # 实际上这里不需要排序， imap_unorderded更快，因为不需要等待stragglers，结果一旦计算完成就可以处理了，而不必等到前面的任务完成. 它是非阻塞的
         for token_map in pool.starmap(_pre_tokenize_worker, [(chunk, special_token_strs) for chunk in token_chunks], chunksize=1):
             word_freqs.update(token_map)
     return word_freqs
 
 class BPETrainer:
-
     def __init__(self, input_path: str, vocab_size: int, special_tokens: list[str], *, disired_num_chunks: int = 8):
         self.corpus = None
         # Reference ordering: special tokens first, then the 256 byte tokens.
