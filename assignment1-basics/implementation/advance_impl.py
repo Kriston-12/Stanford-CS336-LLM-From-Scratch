@@ -53,6 +53,10 @@ class BPEDoublyLinkedList:
         node = self._node
         return self._insert_between(val, node.prev, node)
     
+    # example of use: 
+    # insert 1. sentinel - 1 - sentinel, sentinel.prev = 1, sentinel.next = 1
+    # insert 2. 2.prev = sentinel.prev = 1. 2.right = sentinel
+    #           sentinel.left = 2 
     def _insert_between(self, val: int, left: _Node, right: _Node) -> _Node:
         node = _Node(val=val, prev=left, next=right)
         left.next = node
@@ -65,6 +69,7 @@ class BPEDoublyLinkedList:
         node.next.prev = node.prev
         node.prev = node.next = None 
     
+    # method name gives that new_id = left.val + right.val below 
     def merge_with_next(self, left: _Node, new_id: int) -> _Node:
         assert left.next is not None, "Left node must have a next node to merge with"
         right = left.next
@@ -95,15 +100,14 @@ class _ReverseLexOrderPair:
 def find_chunk_boundaries(
     file: BinaryIO,
     desired_num_chunks: int,
-    special_tokens: list[bytes]
+    special_tokens: list[str]
 ) -> list[int]:
     assert desired_num_chunks > 0, "disired num of chunks must be greater than 0"
 
     file.seek(0, os.SEEK_END)
     file_len = file.tell()
-    
+        
     chunk_size = file_len // desired_num_chunks
-
     # if we want 2 chunks, boundaries should be [0, first chunk end, file_end]
     boundaries: list[int] = [i * chunk_size for i in range(0, desired_num_chunks + 1)]
     boundaries[-1] = file_len
@@ -119,12 +123,12 @@ def find_chunk_boundaries(
         file.seek(initial_pos)
 
         while True:
-            read_buffer = file.read(transition_size)
+            read_buffer: bytes = file.read(transition_size)
             if read_buffer == b"":
                 boundaries[i] = file_len
                 break
 
-            found_offsets = [read_buffer.find(tok) for tok in special_tokens]
+            found_offsets = [read_buffer.find(tok.encode("utf-8")) for tok in special_tokens]
             found_offsets = [off for off in found_offsets if off != -1]
             if found_offsets:
                 boundaries[i] = initial_pos + min(found_offsets)
@@ -136,13 +140,15 @@ def find_chunk_boundaries(
                 break
             file.seek(initial_pos)
 
-    boundaries[-1] = file_len
     return boundaries
 
 PAT = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
 
 def _pre_tokenize_worker(
-    corpus_chunk: str,
+    corpus_path: str,
+    corpus_start_idx: int,
+    corpus_end_idx: int,
+    # corpus_chunk: str,
     special_tokens: list[str],
     ) -> dict[tuple[int, ...], int]:
     # Split on special tokens *before* applying PAT, so merges cannot occur across the
@@ -152,6 +158,11 @@ def _pre_tokenize_worker(
     # Important: use a *capturing* group so special tokens are preserved as separate pieces.
     pieces: list[str]
     special_to_id = {tok: i for i, tok in enumerate(special_tokens)}
+
+    with open(corpus_path, "rb") as corpus:
+        corpus.seek(corpus_start_idx)
+        corpus_chunk = corpus.read(corpus_end_idx - corpus_start_idx).decode("utf-8", errors="ignore")
+
     if special_tokens:
         # "(" + ")" 用来捕获分割后的special token，使其也作为分割结果的一部分返回
         # 如果没有 "()", split会丢弃分割符，而我们需要保留special token作为一个独立的piece，以便后续统计它们的频率并正确地将它们映射到vocab id
@@ -191,43 +202,51 @@ def _pre_tokenize_worker(
 
 def _preprocess(
     num_processes: int, 
-    corpus: BinaryIO, 
-    split_tokens: list[bytes]
+    corpus_path: str, 
+    split_tokens: list[str]
     ) -> dict[tuple[int, ...], int]:
     chunk_boundaries = None
+    # find_chunk_boundaries是在special_tokens边界上划分chunks
+    # 但是不包括special_tokens themselves, 
+    corpus: BinaryIO = open(corpus_path, "rb")
     chunk_boundaries = find_chunk_boundaries(corpus, num_processes, split_tokens)
-    
+    corpus.close()
     total_workers = len(chunk_boundaries)
-    token_chunks: list[str] = []
-    for start, end in zip(chunk_boundaries[:-1], chunk_boundaries[1:]):
-        corpus.seek(start)
-        token_chunks.append(corpus.read(end - start).decode("utf-8", errors="ignore"))
-
+    tasks = [
+        (corpus_path, start, end, split_tokens)
+        for start, end in zip(chunk_boundaries[:-1], chunk_boundaries[1:])
+    ]
     word_freqs: dict[tuple[int, ...], int] = Counter()
-    special_token_strs = [t.decode("utf-8") for t in split_tokens]
+    # special_token_strs = [t.decode("utf-8") for t in split_tokens]
     with Pool(processes=total_workers) as pool:
-        for token_map in pool.starmap(_pre_tokenize_worker, [(chunk, special_token_strs) for chunk in token_chunks], chunksize=1):
+        # better use imap_unordered here to avoid waiting for stragglers
+        # starmap能够保证顺序 
+        # 底层之所以能保证顺序，不是因为子进程按顺序执行，而是靠 索引编号（Task ID）：
+        # 打标签：主进程分发任务时，给每个任务打上索引（例如：Task 0, Task 1, Task 2...）。
+        # 异步执行：子进程从队列里抢任务。可能 Task 2 处理的是一个很小的文本块，先算完了；Task 0 处理的是个大块，还没算完。
+        # 重新排序：结果返回到主进程后，MapResult 对象会维护一个缓存。即使 Task 2 的结果先回来，它也会等到 Task 0 和 Task 1 都回来后，再按照 0, 1, 2 的顺序把结果通过迭代器吐给你。
+        # 实际上这里不需要排序， imap_unorderded更快，因为不需要等待stragglers，结果一旦计算完成就可以处理了，而不必等到前面的任务完成. 它是非阻塞的
+        # 但是imap_unordered 传参的tasks会将嵌套tuple当作整体，下面这样直接传参不行
+        for token_map in pool.starmap(_pre_tokenize_worker, tasks, chunksize=1):
             word_freqs.update(token_map)
     return word_freqs
 
 class BPETrainer:
-
     def __init__(self, input_path: str, vocab_size: int, special_tokens: list[str], *, disired_num_chunks: int = 8):
-        self.corpus = None
         # Reference ordering: special tokens first, then the 256 byte tokens.
         self.vocab: dict[int, bytes] = {}
         # Store merges internally as token-id pairs; convert to bytes at return time.
         self.merge_ids: list[tuple[int, int]] = []
-        self.input_path: BinaryIO = open(input_path, "rb")
+        self.input_path = input_path
         self.vocab_size = vocab_size
-        self.special_tokens: list[bytes] = [special_token.encode("utf-8") for special_token in special_tokens]
+        self.special_tokens: list[str] = special_tokens
         self.desired_num_chunks = disired_num_chunks
 
         # Add special tokens deterministically at the start.
-        self.special_token_to_id: dict[bytes, int] = {}
+        self.special_token_to_id: dict[str, int] = {}
         next_id = 0
         for tok in self.special_tokens:
-            self.vocab[next_id] = tok
+            self.vocab[next_id] = tok.encode("utf-8")
             self.special_token_to_id[tok] = next_id
             next_id += 1
 
@@ -240,7 +259,7 @@ class BPETrainer:
         # Worker already splits on special tokens before PAT tokenization.
         return _preprocess(self.desired_num_chunks, self.input_path, self.special_tokens)
 
-    def train(self, num_merges: int) -> Tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+    def train(self) -> Tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
 
         # Populate word_freqs, word_templates, wordId_freqs, pair_freqs, heap
         word_freqs: dict[tuple[int, ...], int] = self.pretokenize()
@@ -254,7 +273,6 @@ class BPETrainer:
                 pair_freqs[(node.val, node.next.val)] += wordId_freqs[i]
                 pair_position_map[(node.val, node.next.val)].add((i, node))
                 node = node.next
-        # Heap key: (-freq, reverse_lex_pair(bytes,bytes), pair).
         # Per handout, deterministically break ties by preferring the lexicographically
         # *greater* pair (like Python's max on (bytes,bytes)).
         heap: list[tuple[int, _ReverseLexOrderPair, tuple[int, int]]] = [
@@ -263,11 +281,9 @@ class BPETrainer:
         ]
         heapq.heapify(heap)
 
-
         # The adapter passes num_merges=os.cpu_count(); ignore that and derive merges from vocab_size.
         # Contract: vocab_size includes special tokens.
         target_merges = max(0, self.vocab_size - len(self.vocab))
-
 
         sentinel_val = 0
         merges_done = 0

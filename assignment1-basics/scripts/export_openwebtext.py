@@ -11,7 +11,7 @@ uv run python scripts/export_openwebtext.py --num-docs 200000
 '''
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", type=Path, default=Path("data") / "openwebtext_200k.txt")
+    ap.add_argument("--out", type=Path, default=Path("data") / "openwebtext_50k.txt")
     ap.add_argument("--num-docs", type=int, default=200_000)
     ap.add_argument("--split", type=str, default="train")
     ap.add_argument("--cache-dir", type=Path, default=None)
