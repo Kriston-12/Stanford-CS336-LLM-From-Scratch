@@ -21,17 +21,14 @@ class RoPE(nn.Module):
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (..., seq_len, d_k)
-        *prefix, seq_len, _ = x.shape
+        _, seq_len, _ = x.shape
 
         # (seq_len, half) -> broadcast to (..., seq_len, half)
-        cos = self.cos_cached[:seq_len]
-        sin = self.sin_cached[:seq_len]
-        for _ in prefix:
-            cos = cos.unsqueeze(0)  # (..., s, h)
-            sin = sin.unsqueeze(0)
+        # cos = self.cos_cached[:seq_len]
+        # sin = self.sin_cached[:seq_len]
 
-        # cos = rearrange(self.cos_cached[:seq_len], "s h -> 1 s h")  # (1, seq_len, half)
-        # sin = rearrange(self.sin_cached[:seq_len], "s h -> 1 s h")  # (1, seq_len, half)
+        cos = rearrange(self.cos_cached[:seq_len], "s h -> 1 s h")  # (1, seq_len, half)
+        sin = rearrange(self.sin_cached[:seq_len], "s h -> 1 s h")  # (1, seq_len, half)
 
         # Group pairs: (..., seq_len, d_k) -> (..., seq_len, d_k/2, 2)
         # say d_k originally is (x1, y1, x2, y2, x3, y3, ...), we want to group it into ((x1, y1), (x2, y2), (x3, y3), ...)
