@@ -120,8 +120,8 @@ def run_scaled_dot_product_attention(
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
     from implementation.scaled_dot_product_attention import ScaledDotProductAttention
-    sdpa = ScaledDotProductAttention(mask=mask)
-    return sdpa(Q, K, V)
+    sdpa = ScaledDotProductAttention()
+    return sdpa(Q, K, V, mask)
 
 
 def run_multihead_self_attention(
@@ -155,7 +155,15 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    from implementation.multihead_attention import MultiHeadAttention
+    multihead_attention = MultiHeadAttention(d_model, num_heads)
+    return multihead_attention(
+        in_features,
+        q_proj_weight,
+        k_proj_weight,
+        v_proj_weight,
+        o_proj_weight
+    )
 
 
 def run_multihead_self_attention_with_rope(
@@ -195,7 +203,16 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    from implementation.multihead_attention import MultiHeadAttention
+    multihead_attention = MultiHeadAttention(d_model, num_heads, theta=theta, max_seq_len=max_seq_len)
+    print("infeature seq_len:", in_features.shape[-2])
+    return multihead_attention(
+        in_features,
+        q_proj_weight,
+        k_proj_weight,
+        v_proj_weight,
+        o_proj_weight
+    )
 
 
 def run_rope(
