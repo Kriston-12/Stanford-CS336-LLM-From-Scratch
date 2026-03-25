@@ -4,7 +4,7 @@ import torch
 class RMSNorm(nn.Module):
     def __init__(self, d_model: int, eps: float = 1e-5, device=None, dtype=None):
         super().__init__()
-        self.g = nn.Parameter(torch.empty((d_model,), device=device, dtype=dtype))
+        self.g = nn.Parameter(torch.ones((d_model,), device=device, dtype=dtype))
         self.eps = eps
 
     # input: (batch_size, seq_len, d_model) 

@@ -1,19 +1,20 @@
 import torch
+from implementation.linear import Linear
 
 class SwiGLU(torch.nn.Module):
     def __init__(self, d_model: int, d_ff: int, device=None, dtype=None):
         super().__init__()
 
-        self.w1 = torch.nn.Parameter(torch.empty((d_ff, d_model), device=device, dtype=dtype))
-        self.w3 = torch.nn.Parameter(torch.empty((d_ff, d_model), device=device, dtype=dtype))
-        self.w2 = torch.nn.Parameter(torch.empty((d_model, d_ff), device=device, dtype=dtype))
+        self.w1 = Linear(out_features=d_ff, in_features=d_model, device=device, dtype=dtype)
+        self.w3 = Linear(out_features=d_ff, in_features=d_model, device=device, dtype=dtype)
+        self.w2 = Linear(out_features=d_model, in_features=d_ff, device=device, dtype=dtype)
 
     # input: (batch_size, seq_len, d_model)
     # W2 @ (SiLU(W1 @ x) * (W3 @ x))
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        w1x = x @ self.w1.T
-        return (torch.sigmoid(w1x) * (w1x) * (x @ self.w3.T)) @ self.w2.T
-
+        w1x = self.w1(x) # (batch_size, seq_len, d_ff)
+        w3x = self.w3(x) # (batch_size, seq_len, d_ff)
+        return self.w2(torch.sigmoid(w1x) * w1x * w3x) # (batch_size, seq_len, d_model)
 # def test():
 #     a = torch.arange(1, 10).reshape(3, 3).float()
 #     b = a.T

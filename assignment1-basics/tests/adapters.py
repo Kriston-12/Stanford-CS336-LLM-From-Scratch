@@ -34,9 +34,6 @@ def run_linear(
     return linear(in_features)
     
 
-    
-
-
 def run_embedding(
     vocab_size: int,
     d_model: int,
@@ -94,9 +91,9 @@ def run_swiglu(
 
     from implementation.swiglu import SwiGLU
     swiglu = SwiGLU(d_model, d_ff)
-    swiglu.w1.data = w1_weight
-    swiglu.w2.data = w2_weight
-    swiglu.w3.data = w3_weight
+    swiglu.w1.weight.data = w1_weight
+    swiglu.w2.weight.data = w2_weight
+    swiglu.w3.weight.data = w3_weight
 
     return swiglu(in_features)
 
@@ -156,14 +153,14 @@ def run_multihead_self_attention(
         implementation with the given QKV projection weights and input features.
     """
     from implementation.multihead_attention import MultiHeadAttention
-    multihead_attention = MultiHeadAttention(d_model, num_heads)
+    multihead_attention = MultiHeadAttention(d_model, num_heads,
+                                            q_proj_weight=q_proj_weight,
+                                            k_proj_weight=k_proj_weight,
+                                            v_proj_weight=v_proj_weight,
+                                            o_proj_weight=o_proj_weight)
     return multihead_attention(
-        in_features,
-        q_proj_weight,
-        k_proj_weight,
-        v_proj_weight,
-        o_proj_weight
-    )
+        in_features
+    )   
 
 
 def run_multihead_self_attention_with_rope(
@@ -204,14 +201,13 @@ def run_multihead_self_attention_with_rope(
         implementation with the given QKV projection weights and input features.
     """
     from implementation.multihead_attention import MultiHeadAttention
-    multihead_attention = MultiHeadAttention(d_model, num_heads, theta=theta, max_seq_len=max_seq_len)
-    print("infeature seq_len:", in_features.shape[-2])
+    multihead_attention = MultiHeadAttention(
+        d_model, num_heads, theta=theta, max_seq_len=max_seq_len
+        , q_proj_weight=q_proj_weight, k_proj_weight=k_proj_weight, v_proj_weight=v_proj_weight, o_proj_weight=o_proj_weight
+    )
+    # print("infeature seq_len:", in_features.shape[-2])
     return multihead_attention(
-        in_features,
-        q_proj_weight,
-        k_proj_weight,
-        v_proj_weight,
-        o_proj_weight
+        in_features
     )
 
 
@@ -309,7 +305,9 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    from implementation.transformer_block import TransformerBlock
+    transformer_block = TransformerBlock(d_model, num_heads, d_ff, max_seq_len, theta, weights)
+    return transformer_block(in_features)
 
 
 def run_transformer_lm(
