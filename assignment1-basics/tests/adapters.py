@@ -494,7 +494,7 @@ def run_cross_entropy(
     """
     from implementation.cross_entropy import CrossEntropyLoss
     cel = CrossEntropyLoss()
-    return cel(inputs)
+    return cel(inputs, targets)
 
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
@@ -513,7 +513,10 @@ def get_adamw_cls() -> Any:
     """
     Returns a torch.optim.Optimizer that implements AdamW.
     """
-    raise NotImplementedError
+    # implementation.AdamW is a module -- since AdamW.py is a file
+    # implementation.AdamW.AdamW is a class that implements AdamW and inherits from torch.optim.Optimizer
+    from implementation.AdamW import AdamW
+    return AdamW
 
 
 def run_get_lr_cosine_schedule(
