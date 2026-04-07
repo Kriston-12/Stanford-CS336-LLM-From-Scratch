@@ -35,3 +35,18 @@ class CosineLRScheduler:
         else:
             return self.min_lr
              
+def consine_lr_schedule(
+    it: int,
+    max_learning_rate: float,
+    min_learning_rate: float,
+    warmup_iters: int,
+    cosine_cycle_iters: int
+) -> float:
+    if it < warmup_iters: # 开始lr 要够大，迅速上升
+        return max_learning_rate * it / warmup_iters
+    elif it <= cosine_cycle_iters: # 中途cos cycle. 从0.5(1 + cos0) 到 0.5(1 + cospi) -- 从1到0
+        cosine_decay = 0.5 * (1 + math.cos((it - warmup_iters) * math.pi \
+                                                    / (cosine_cycle_iters - warmup_iters)))
+        return min_learning_rate + (max_learning_rate - min_learning_rate) * cosine_decay
+    else:
+        return min_learning_rate
