@@ -17,6 +17,11 @@ class _Node: # vocab[vocab_id] = val, vocab_id是为了我们找到merge之后�
 class EncoderDoublyLinkedList:
     __slots__ = ['_node' ]
     def __init__(self, init_list: Optional[Iterable[int]] = None):
+        # _node is a sentinel node (dummy head/tail), 构成双向循环列表
+        # - 空链表时: _node.prev = _node.next = _node
+        # - 非空时：
+        #     _node.next = 第一个真实节点（head）
+        #     _node.prev = 最后一个真实节点（tail）
         Node = _Node(0)
         Node.prev = Node.next = Node
         self._node = Node
@@ -24,10 +29,12 @@ class EncoderDoublyLinkedList:
         for x in init_list:
             self.append(x)
 
-    # self._node.prev stays unchanged, it's always itself
-    # self._node.right changes to the newly init node
-    # the []
     def append(self, val: int):
+        # 追加逻辑（在尾部插入）：
+        # 1. 当前尾节点为 tail = self._node.prev
+        # 2. 创建新节点 new，令 new.prev = tail, new.next = self._node（哨兵）
+        # 3. 让 tail.next = new，把新节点接在旧尾后面
+        # 4. 更新哨兵：self._node.prev = new（新尾）
         new_node = _Node(val,  self._node.prev, self._node)
         last_added_node = self._node.prev
         last_added_node.next = new_node
@@ -67,6 +74,7 @@ class Tokenizer:
 
         # Important: handle overlapping special tokens by matching the longest first.
         # Example: "<|endoftext|>" vs "<|endoftext|><|endoftext|><|endoftext|>".
+        # 如果没有sort，那么"<|endoftext|><|endoftext|><|endoftext|>"会被优先匹配成三个"<|endoftext|>"，而不是一个"<|endoftext|><|endoftext|><|endoftext|>"，这会导致tokenization结果不正确。
         if self.special_tokens:
             self.special_tokens = sorted(self.special_tokens, key=len, reverse=True)
             self.special_patterns = re.compile(
@@ -144,6 +152,7 @@ class Tokenizer:
                 out.extend(self._encode_single(raw))
         return out
     
+
     def _encode_single(self, text: bytes) -> list[int]:
         if not text:
             return []
@@ -196,7 +205,6 @@ class Tokenizer:
                 try_push(node)
         return [node.val for node in dll]
             
-
 
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
         for text in iterable:

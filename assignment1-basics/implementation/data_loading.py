@@ -31,7 +31,19 @@ class DataLoader:
         self.device = device
 
     def get_batch(self):
-        start_indices = torch.randint(low = 0, high=len(self.dataset) - self.context_length, size=(self.batch_size,))
-        input_sequences = torch.stack([torch.from_numpy(self.dataset[i: i + self.context_length]) for i in start_indices])
-        labels = torch.stack([torch.from_numpy(self.dataset[i + 1: i + self.context_length + 1]) for i in start_indices])
-        return input_sequences.to(self.device), labels.to(self.device)
+        # randint high是exclusive的，所以本来就不会取到len(self.dataset) - self.context_length这个值，这样就保证了后面i + self.context_length + 1不会越界。
+        start_indices = torch.randint(low=0, high=len(self.dataset) - self.context_length, size=(self.batch_size,))
+        input_sequences = torch.stack([torch.from_numpy(self.dataset[i: i + self.context_length]) for i in start_indices], dim=0)
+        label_sequences = torch.stack([torch.from_numpy(self.dataset[i + 1: i + self.context_length + 1]) for i in start_indices], dim=0)
+        return input_sequences.to(self.device), label_sequences.to(self.device)
+
+def load_data(
+    dataset: ndarray,
+    batch_size: int,
+    context_length:int,
+    device: str
+) -> tuple[torch.LongTensor, torch.LongTensor]:
+    start_indices = torch.randint(low=0, high=len(dataset) - context_length, size=(batch_size,))
+    input_sequences = torch.stack([torch.from_numpy(dataset[i: i + context_length]) for i in start_indices], dim=0)
+    label_sequences = torch.stack([torch.from_numpy(dataset[i + 1: i + 1 + context_length]) for i in start_indices], dim=0)
+    return input_sequences.to(device), label_sequences.to(device)

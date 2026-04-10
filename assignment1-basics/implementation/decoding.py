@@ -18,12 +18,17 @@ def sample_next_token(
         cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
 
         remove_mask = cumulative_probs > top_p_threshold
-        remove_mask[..., 1:] = remove_mask[..., :-1].clone()
+
+        # e.g. remove_mask = [False, False, True], we need all 3 elements to exceed the threshold
+        # remove_mask[..., 1:] = [False, True]
+        # remove_mask[..., :-1] = [False, False]
+        remove_mask[..., 1:] = remove_mask[..., :-1].clone() # shift right by one
         remove_mask[..., 0] = False
 
         sorted_probs = sorted_probs.masked_fill(remove_mask, 0.0)
         sorted_probs = sorted_probs / sorted_probs.sum(dim=-1, keepdim=True)
 
+        # torch.multinomial return indices instead of values.
         sampled_sorted_positions = torch.multinomial(sorted_probs, num_samples=1)
         return torch.gather(sorted_indices, dim=-1, index=sampled_sorted_positions)
 
@@ -54,6 +59,7 @@ def decode(
 
         generated = torch.cat([generated, next_token_ids], dim=1)
 
+        # 这里应该去掉next_token_ids = eos的batch元素，但是为了简单，我们等到all元素都是eos才break
         if eos_ids is not None and torch.isin(next_token_ids, eos_ids).all():
             break
 

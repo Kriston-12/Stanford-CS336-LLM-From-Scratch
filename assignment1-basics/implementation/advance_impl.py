@@ -14,17 +14,6 @@ from collections import Counter
     # set[int] = set(Node1, Node2, Node3). merge可以直接用 map[pair].prev = map[pair].next来更新node
 
 
-# 下面两个classes用于维护BPE的merge逻辑，O(1)时间修改语段
-# dataclass会自带__repr__, __init__, __eq__, __hash__等方法，slots=True可以节省内存，加快属性访问，eq=False表示不需要比较对象的相等性（默认是比较对象的属性值），因为我们只需要比较对象的id来判断是否是同一个node，所以不需要比较属性值
-# @dataclass(slots=True, eq=False)
-# class _Node:
-#     val: int
-#     prev: Optional["_Node"] = None
-#     next: Optional["_Node"] = None
-
-#     def __hash__(self):
-#         return id(self)
-
 # No need to implementa __hash__ and __equal__, by default, python objects are hashable and equal by their id 
 class _Node:
     __slots__ = ['val', 'prev', 'next'] # 节省内存，加快属性访问
@@ -390,6 +379,10 @@ if __name__ == "__main__":
     # print(re.escape("<|endoftext|>"))
     # pieces = special_pat.split("Hi<|endoftext|>There")
     # print(pieces)  # ['Hi', '<|endoftext|>', 'There']
+
+    # special_pat2 = re.compile(re.escape("<|endoftext|>"))
+    # pieces2 = special_pat2.split("Hi<|endoftext|>There")
+    # print(pieces2) # ['Hi', 'There'] # re.escape("<|endoftext|>") 只是把特殊字符转义了，但没有加捕获组，所以 split后分割符被丢弃了，而不是作为一个独立的piece返回
     corpus = f"Hello, world! This is a test. <|endoftext|>"
     special_pat = re.compile("(" + re.escape("<|endoftext|>") + ")")
     pieces = special_pat.split(corpus) # ['Hello, world! This is a test. ', '<|endoftext|>', '']

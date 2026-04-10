@@ -69,11 +69,12 @@ def build_model(config: ModelConfig):
 def build_optimizer(model: Transformer, config: OptimizerConfig):
     return AdamW(
         model.parameters(),
-        lr=config.lr
+        lr=config.lr,
         weight_decay=config.weight_decay,
-        betas = (config.beta1, config.beta2),
-        eps = config.eps
+        betas=(config.beta1, config.beta2),
+        eps=config.eps
     )
+
 
 def train(config: TrainingConfig):
     train_data = None
