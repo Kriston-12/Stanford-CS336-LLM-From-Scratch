@@ -16,20 +16,22 @@ from collections import Counter
 
 # No need to implementa __hash__ and __equal__, by default, python objects are hashable and equal by their id 
 class _Node:
-    __slots__ = ['val', 'prev', 'next'] # 节省内存，加快属性访问
+    __slots__ = ['val', 'prev', 'next', 'pos'] # 节省内存，加快属性访问
     
-    def __init__(self, val: int, prev=None, next=None):
+    def __init__(self, val: int, prev=None, next=None, pos: int = -1):
         self.val = val
         self.prev = prev
         self.next = next
+        self.pos = pos # position of the node in the DoublyLinkedList, used for tie-breaking in pair_position_map when multiple occurrences of the same pair exist in the same word template--严格从左到右的merge顺序
 
 class BPEDoublyLinkedList:
-    __slots__ = ("_node", "_size") # 节省内存，加快属性访问
+    __slots__ = ("_node", "_size", "_next_pos") # 节省内存，加快属性访问
     def __init__(self, tokens: Optional[Iterable[int]] = None):
         node = _Node(0)
         node.prev = node.next = node
         self._node = node
         self._size = 0
+        self._next_pos = 0
         
         if tokens is not None:
             for token in tokens:
@@ -40,16 +42,17 @@ class BPEDoublyLinkedList:
 
     def append(self, val: int) -> _Node:
         node = self._node
-        return self._insert_between(val, node.prev, node)
+        return self._insert_between(val, node.prev, node, self._next_pos)
     
     # example of use: 
     # insert 1. sentinel - 1 - sentinel, sentinel.prev = 1, sentinel.next = 1
     # insert 2. 2.prev = sentinel.prev = 1. 2.right = sentinel
     #           sentinel.left = 2 
-    def _insert_between(self, val: int, left: _Node, right: _Node) -> _Node:
-        node = _Node(val=val, prev=left, next=right)
+    def _insert_between(self, val: int, left: _Node, right: _Node, pos: int) -> _Node:
+        node = _Node(val=val, prev=left, next=right, pos=pos)
         left.next = node
         right.prev = node
+        self._next_pos += 1
         return node
     
     def _unlink(self, node: _Node) -> None:
@@ -219,11 +222,11 @@ def _preprocess(
         # 重新排序：结果返回到主进程后，MapResult 对象会维护一个缓存。即使 Task 2 的结果先回来，它也会等到 Task 0 和 Task 1 都回来后，再按照 0, 1, 2 的顺序把结果通过迭代器吐给你。
         # 实际上这里不需要排序， imap_unorderded更快，因为不需要等待stragglers，结果一旦计算完成就可以处理了，而不必等到前面的任务完成. 它是非阻塞的
         # 但是imap_unordered 传参的tasks会将嵌套tuple当作整体，下面这样直接传参不行
-        # for token_map in pool.starmap(_pre_tokenize_worker, tasks, chunksize=1):
-        #     word_freqs.update(token_map)
-
-        for token_map in pool.imap_unordered(_pre_tokenize_worker_imap, tasks, chunksize=1):
+        for token_map in pool.starmap(_pre_tokenize_worker, tasks, chunksize=1):
             word_freqs.update(token_map)
+
+        # for token_map in pool.imap_unordered(_pre_tokenize_worker_imap, tasks, chunksize=1):
+        #     word_freqs.update(token_map)
     return word_freqs
 
 class BPETrainer:
@@ -300,9 +303,16 @@ class BPETrainer:
             # positions = list(pair_position_map[pair])
             # Deterministic order: pair_position_map stores occurrences in a set, whose
             # iteration order can vary across runs. The order matters because merging one
-            # occurrence can invalidate or shift neighboring occurrences within the same
-            # word. Sort by (wordId, id(node)) to make behavior stable.
-            positions = sorted(pair_position_map[pair], key=lambda wn: (wn[0], id(wn[1])))
+            # 比如说我们有 A, A, A. 那么Pair[(A, A)] = {(wordId1, node1), (wordId2, node2)}. 
+            # 由于value是set, for x in set的时候顺序是不确定的，比如这次trial先处理wordId1, 那么merge前两个A得到 XA
+            # 下次merge后两个A,得到 AX. 
+            # 假设AAA周围还有 CAAAC. 并且CX和XC的频率相同，第一次trial出现的CXAC会将C和X再合并，此时值超过XC，打破平衡，然后CX就因为频率更高下次出heap的时候就会因此unfair advantage先被处理
+            # 这种连锁反应会导致结果不一致
+            # 这里没有严格遵循BPE从左到右的merge顺序
+            # positions = sorted(pair_position_map[pair], key=lambda wn: (wn[0], id(wn[1])))
+
+            # 更严谨的做法是为node加上position属性，记录它在word_template中的位置，这样就可以严格按照BPE从左到右的merge顺序来处理pair_position_map[pair]中的node了，而不必担心set的迭代顺序问题
+            positions = sorted(pair_position_map[pair], key=lambda wn: (wn[0], wn[1].pos))
 
             to_remove: dict[tuple[int, int], list[tuple[int, _Node]]] = collections.defaultdict(list)
             to_add: dict[tuple[int, int], list[tuple[int, _Node]]] = collections.defaultdict(list)
