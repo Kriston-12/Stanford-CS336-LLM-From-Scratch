@@ -30,15 +30,11 @@ class BPEDoublyLinkedList:
         node = _Node(0)
         node.prev = node.next = node
         self._node = node
-        self._size = 0
         self._next_pos = 0
         
         if tokens is not None:
             for token in tokens:
                 self.append(token)
-    
-    def __len__(self) -> int:
-        return self._size
 
     def append(self, val: int) -> _Node:
         node = self._node

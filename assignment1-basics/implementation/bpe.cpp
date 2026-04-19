@@ -1,13 +1,9 @@
-import cppyy
-
-cppyy.cppdef(r"""
-#include <vector>
-#include <memory>
-#include <queue>
-#include <string_view>
-#include <string>
 #include <unordered_map>
-#include <utility>
+#include <vector>
+#include <queue>
+#include <memory>
+#include <string>
+#include <thread>
 
 void add_vocab(std::unordered_map<int, std::string>& m, int k, const std::string& v) {
     m[k] = v;
@@ -15,10 +11,6 @@ void add_vocab(std::unordered_map<int, std::string>& m, int k, const std::string
 
 void add_bytes_to_id(std::unordered_map<std::string, int>& m, const std::string& k, int v) {
     m[k] = v;
-}
-
-void add_merge(std::vector<std::pair<std::string, std::string>>& merges, const std::string& a, const std::string& b) {
-    merges.push_back({a, b});
 }
 
 class Node {
@@ -215,8 +207,7 @@ std::vector<int> encode_words(
     const std::unordered_map<int, std::string>& vocab,
     const std::unordered_map<std::string, int>& bytes_to_ids,
     const std::unordered_map<std::pair<int, int>, int, PairHash>& rank
-) 
-{
+) {
     if (words.empty()) return {};
 
     std::vector<int> out;
@@ -226,7 +217,7 @@ std::vector<int> encode_words(
     }
     return out;
 }
-             
+
 std::vector<int> encode_words_parallel(
     const std::vector<std::string>& words,
     const std::unordered_map<int, std::string>& vocab,
@@ -236,14 +227,19 @@ std::vector<int> encode_words_parallel(
     if (words.empty()) return {};
     int num_threads = std::thread::hardware_concurrency();
     int n = words.size();
+    num_threads = std::min(n, num_threads);
     int chunk_size = (n + num_threads - 1) / num_threads;
-
-    std::vector<std::thread> thread_pool(num_threads);
-    std::vector<std::vector<int>> results(n); // to store results from each thread
+    
+    std::vector<std::thread> thread_pool;
+    thread_pool.reserve(num_threads);
+    
+    std::vector<std::vector<int>> results(n); 
 
     for (int i = 0; i < num_threads; i++) {
-        int start = i * chunk_size; // reach chunk is a list of std::string (words)
+        int start = i * chunk_size; 
         int end = std::min(start + chunk_size, n);
+        if (start >= n) break;
+
         thread_pool.emplace_back([start, end, &words, &vocab, &bytes_to_ids, &rank, &results](){
             for (int j = start; j < end; j++) {
                 results[j] = encode_single(words[j], vocab, bytes_to_ids, rank);
@@ -262,97 +258,3 @@ std::vector<int> encode_words_parallel(
     }
     return out;
 }
-
-""");
-import regex as re
-import json
-from typing import Iterator
-
-PAT = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
-
-class Tokenizer:
-    def __init__(
-        self, 
-        vocab: dict[int, bytes], 
-        merges: list[tuple[bytes, bytes]],
-        special_tokens: list[str] | None = None
-    ):
-        self.vocab = vocab
-        self.merges = merges
-        self.special_tokens = special_tokens or []
-        self.bytes_to_id = {v: k for k, v in self.vocab.items()}
-        
-        # Convert complex byte dicts into cppyy compatible std::unordered_map
-        self._cpp_vocab = cppyy.gbl.std.unordered_map['int', 'std::string']()
-        for k, v in self.vocab.items():
-            cppyy.gbl.add_vocab(self._cpp_vocab, k, v)
-
-        self._cpp_bytes_to_id = cppyy.gbl.std.unordered_map['std::string', 'int']()
-        for k, v in self.bytes_to_id.items():
-            cppyy.gbl.add_bytes_to_id(self._cpp_bytes_to_id, k, v)
-
-        
-        if self.special_tokens:
-            self.special_tokens = sorted(self.special_tokens, key=len, reverse=True)
-            self.special_patterns = re.compile(
-                "(" + "|".join(re.escape(tok) for tok in self.special_tokens) + ")"
-            )
-            self.special_to_id = {
-                tok: self.bytes_to_id[tok.encode("utf-8")]
-                for tok in self.special_tokens
-            }
-        else:
-            self.special_patterns = None
-            self.special_to_id = {}
-
-        merges_cpp = cppyy.gbl.std.vector['std::pair<std::string, std::string>']()
-        for m in self.merges:
-            cppyy.gbl.add_merge(merges_cpp, m[0], m[1])
-        self.rank = cppyy.gbl.build_rank(merges_cpp, self._cpp_bytes_to_id)
-
-    @classmethod
-    def from_files(cls, vocab_filepath: str,  
-                   merges_filepath: str, 
-                   special_tokens: list[str] | None = None):
-        vocab: dict[int, bytes] = {}
-        merges: list[tuple[bytes, bytes]] = []
-        with open(vocab_filepath, "rb") as f:
-            vocab = json.load(f)
-        with open(merges_filepath, "rb") as f:
-            for line in f:
-                cleaned = line.rstrip()
-                if cleaned and len(cleaned.split(b" ")) == 2:
-                    a, b = cleaned.split(b" ")
-                    merges.append((a, b))
-        return cls({int(k): v.encode("utf-8") if isinstance(v, str) else v for k, v in vocab.items()}, merges, special_tokens)
-
-    def encode(self, text: str) -> list[int]:
-        if self.special_patterns:
-            pieces = self.special_patterns.split(text)
-        else:
-            pieces = [text]
-            
-        out = []
-        for piece in pieces:
-            if not piece:
-                continue
-            if piece in self.special_tokens:
-                out.append(self.special_to_id[piece])
-                continue
-
-            raw_words = []
-            for m in PAT.finditer(piece):
-                raw = m.group(0).encode("utf-8")
-                raw_words.append(raw)
-                # out.extend(cppyy.gbl.encode_single(raw, self._cpp_vocab, self._cpp_bytes_to_id, self.rank))
-            # 上面如果逐个word调用cppyy.global_name_space.encode_single，速度会暴跌，原因是多次在cpp和python之间切换会有大量的call overhead。
-            if raw_words:
-                out.extend(cppyy.gbl.encode_words_parallel(raw_words, self._cpp_vocab, self._cpp_bytes_to_id, self.rank))
-        return out
-
-    def encode_iterable(self, iterable) -> Iterator[int]:
-        for text in iterable:
-            yield from self.encode(text)
-
-    def decode(self, ids: list[int]) -> str:
-        return b"".join(self.vocab[i] for i in ids if i in self.vocab).decode("utf-8", errors="replace")
