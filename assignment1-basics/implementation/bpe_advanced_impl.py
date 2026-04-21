@@ -14,53 +14,41 @@ from collections import Counter
     # set[int] = set(Node1, Node2, Node3). merge可以直接用 map[pair].prev = map[pair].next来更新node
 
 
-# 下面两个classes用于维护BPE的merge逻辑，O(1)时间修改语段
-# dataclass会自带__repr__, __init__, __eq__, __hash__等方法，slots=True可以节省内存，加快属性访问，eq=False表示不需要比较对象的相等性（默认是比较对象的属性值），因为我们只需要比较对象的id来判断是否是同一个node，所以不需要比较属性值
-# @dataclass(slots=True, eq=False)
-# class _Node:
-#     val: int
-#     prev: Optional["_Node"] = None
-#     next: Optional["_Node"] = None
-
-#     def __hash__(self):
-#         return id(self)
-
 # No need to implementa __hash__ and __equal__, by default, python objects are hashable and equal by their id 
 class _Node:
-    __slots__ = ['val', 'prev', 'next'] # 节省内存，加快属性访问
+    __slots__ = ['val', 'prev', 'next', 'pos'] # 节省内存，加快属性访问
     
-    def __init__(self, val: int, prev=None, next=None):
+    def __init__(self, val: int, prev=None, next=None, pos: int = -1):
         self.val = val
         self.prev = prev
         self.next = next
+        self.pos = pos # position of the node in the DoublyLinkedList, used for tie-breaking in pair_position_map when multiple occurrences of the same pair exist in the same word template--严格从左到右的merge顺序
 
 class BPEDoublyLinkedList:
-    __slots__ = ("_node", "_size") # 节省内存，加快属性访问
+    __slots__ = ("_node", "_size", "_next_pos") # 节省内存，加快属性访问
     def __init__(self, tokens: Optional[Iterable[int]] = None):
         node = _Node(0)
         node.prev = node.next = node
         self._node = node
-        self._size = 0
+        self._next_pos = 0
         
         if tokens is not None:
             for token in tokens:
                 self.append(token)
-    
-    def __len__(self) -> int:
-        return self._size
 
     def append(self, val: int) -> _Node:
         node = self._node
-        return self._insert_between(val, node.prev, node)
+        return self._insert_between(val, node.prev, node, self._next_pos)
     
     # example of use: 
     # insert 1. sentinel - 1 - sentinel, sentinel.prev = 1, sentinel.next = 1
     # insert 2. 2.prev = sentinel.prev = 1. 2.right = sentinel
     #           sentinel.left = 2 
-    def _insert_between(self, val: int, left: _Node, right: _Node) -> _Node:
-        node = _Node(val=val, prev=left, next=right)
+    def _insert_between(self, val: int, left: _Node, right: _Node, pos: int) -> _Node:
+        node = _Node(val=val, prev=left, next=right, pos=pos)
         left.next = node
         right.prev = node
+        self._next_pos += 1
         return node
     
     def _unlink(self, node: _Node) -> None:
@@ -200,6 +188,9 @@ def _pre_tokenize_worker(
         out[(special_to_id[tok],)] = out.get((special_to_id[tok],), 0) + c
     return out
 
+def _pre_tokenize_worker_imap(args):
+    return _pre_tokenize_worker(*args)
+
 def _preprocess(
     num_processes: int, 
     corpus_path: str, 
@@ -211,7 +202,7 @@ def _preprocess(
     corpus: BinaryIO = open(corpus_path, "rb")
     chunk_boundaries = find_chunk_boundaries(corpus, num_processes, split_tokens)
     corpus.close()
-    total_workers = len(chunk_boundaries)
+    total_workers = len(chunk_boundaries) - 1 #因为zip(chunk_boundaries[:-1], chunk_boundaries[1:])会生成 len(chunk_boundaries) - 1 个 (start, end) pair
     tasks = [
         (corpus_path, start, end, split_tokens)
         for start, end in zip(chunk_boundaries[:-1], chunk_boundaries[1:])
@@ -229,6 +220,9 @@ def _preprocess(
         # 但是imap_unordered 传参的tasks会将嵌套tuple当作整体，下面这样直接传参不行
         for token_map in pool.starmap(_pre_tokenize_worker, tasks, chunksize=1):
             word_freqs.update(token_map)
+
+        # for token_map in pool.imap_unordered(_pre_tokenize_worker_imap, tasks, chunksize=1):
+        #     word_freqs.update(token_map)
     return word_freqs
 
 class BPETrainer:
@@ -305,9 +299,16 @@ class BPETrainer:
             # positions = list(pair_position_map[pair])
             # Deterministic order: pair_position_map stores occurrences in a set, whose
             # iteration order can vary across runs. The order matters because merging one
-            # occurrence can invalidate or shift neighboring occurrences within the same
-            # word. Sort by (wordId, id(node)) to make behavior stable.
-            positions = sorted(pair_position_map[pair], key=lambda wn: (wn[0], id(wn[1])))
+            # 比如说我们有 A, A, A. 那么Pair[(A, A)] = {(wordId1, node1), (wordId2, node2)}. 
+            # 由于value是set, for x in set的时候顺序是不确定的，比如这次trial先处理wordId1, 那么merge前两个A得到 XA
+            # 下次merge后两个A,得到 AX. 
+            # 假设AAA周围还有 CAAAC. 并且CX和XC的频率相同，第一次trial出现的CXAC会将C和X再合并，此时值超过XC，打破平衡，然后CX就因为频率更高下次出heap的时候就会因此unfair advantage先被处理
+            # 这种连锁反应会导致结果不一致
+            # 这里没有严格遵循BPE从左到右的merge顺序
+            # positions = sorted(pair_position_map[pair], key=lambda wn: (wn[0], id(wn[1])))
+
+            # 更严谨的做法是为node加上position属性，记录它在word_template中的位置，这样就可以严格按照BPE从左到右的merge顺序来处理pair_position_map[pair]中的node了，而不必担心set的迭代顺序问题
+            positions = sorted(pair_position_map[pair], key=lambda wn: (wn[0], wn[1].pos))
 
             to_remove: dict[tuple[int, int], list[tuple[int, _Node]]] = collections.defaultdict(list)
             to_add: dict[tuple[int, int], list[tuple[int, _Node]]] = collections.defaultdict(list)
@@ -390,6 +391,10 @@ if __name__ == "__main__":
     # print(re.escape("<|endoftext|>"))
     # pieces = special_pat.split("Hi<|endoftext|>There")
     # print(pieces)  # ['Hi', '<|endoftext|>', 'There']
+
+    # special_pat2 = re.compile(re.escape("<|endoftext|>"))
+    # pieces2 = special_pat2.split("Hi<|endoftext|>There")
+    # print(pieces2) # ['Hi', 'There'] # re.escape("<|endoftext|>") 只是把特殊字符转义了，但没有加捕获组，所以 split后分割符被丢弃了，而不是作为一个独立的piece返回
     corpus = f"Hello, world! This is a test. <|endoftext|>"
     special_pat = re.compile("(" + re.escape("<|endoftext|>") + ")")
     pieces = special_pat.split(corpus) # ['Hello, world! This is a test. ', '<|endoftext|>', '']

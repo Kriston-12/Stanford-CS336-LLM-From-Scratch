@@ -65,8 +65,8 @@ class TransformerBlock(nn.Module):
         d_ff: int, 
         max_seq_len: int, 
         theta: float, 
-        weights: dict[str, torch.Tensor]):
-
+        weights: dict[str, torch.Tensor] | None = None
+    ):
         super().__init__()
         self.attention_rmsnorm = RMSNorm(d_model=d_model)
         self.ffn_rmsnorm = RMSNorm(d_model=d_model)

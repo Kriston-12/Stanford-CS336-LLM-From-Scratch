@@ -15,7 +15,7 @@ class Transformer(nn.Module):
         num_heads: int,
         d_ff: int,
         rope_theta: float,
-        weights: dict[str, Tensor],
+        weights: dict[str, Tensor] | None = None,
         # in_indices: Tensor  # " batch_size sequence_length"
     ):
         super().__init__()

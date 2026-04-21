@@ -456,7 +456,8 @@ def run_get_batch(
         is the sampled input sequences, and the second tuple item is the corresponding
         language modeling labels.
     """
-    raise NotImplementedError
+    from implementation.data_loading import DataLoader, load_data
+    return load_data(dataset, batch_size, context_length, device)
 
 
 def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, " ..."]:
@@ -492,7 +493,9 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
+    from implementation.cross_entropy import CrossEntropyLoss
+    cel = CrossEntropyLoss()
+    return cel(inputs, targets)
 
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
@@ -504,14 +507,19 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    raise NotImplementedError
+    from implementation.gradient_clipper import GradientClipper
+    gradient_clipper = GradientClipper(max_l2_norm)
+    gradient_clipper.clip_gradients(parameters)
 
 
 def get_adamw_cls() -> Any:
     """
     Returns a torch.optim.Optimizer that implements AdamW.
     """
-    raise NotImplementedError
+    # implementation.AdamW is a module -- since AdamW.py is a file
+    # implementation.AdamW.AdamW is a class that implements AdamW and inherits from torch.optim.Optimizer
+    from implementation.AdamW import AdamW
+    return AdamW
 
 
 def run_get_lr_cosine_schedule(
@@ -539,7 +547,8 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    raise NotImplementedError
+    from implementation.consineLR_scheduler import consine_lr_schedule
+    return consine_lr_schedule(it, max_learning_rate, min_learning_rate, warmup_iters, cosine_cycle_iters)
 
 
 def run_save_checkpoint(
@@ -558,7 +567,8 @@ def run_save_checkpoint(
             we've completed.
         out (str | os.PathLike | BinaryIO | IO[bytes]): Path or file-like object to serialize the model, optimizer, and iteration to.
     """
-    raise NotImplementedError
+    from implementation.checkpointing import save_checkpoint
+    return save_checkpoint(model, optimizer, iteration, out)
 
 
 def run_load_checkpoint(
@@ -579,7 +589,8 @@ def run_load_checkpoint(
     Returns:
         int: the previously-serialized number of iterations.
     """
-    raise NotImplementedError
+    from implementation.checkpointing import load_checkpoint
+    return load_checkpoint(src, model, optimizer)
 
 
 def get_tokenizer(
