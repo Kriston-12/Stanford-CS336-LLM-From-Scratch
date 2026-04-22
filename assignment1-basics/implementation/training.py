@@ -9,6 +9,9 @@ from implementation.transformer_LM import Transformer
 from implementation.cross_entropy import CrossEntropyLoss
 from implementation.gradient_clipper import clip_gradients
 import numpy as np
+import json
+import os
+from typing import Tuple
 
 @dataclass
 class ModelConfig:
@@ -34,9 +37,10 @@ class OptimizerConfig:
 class TrainingConfig:
     model: ModelConfig
     optimizer: OptimizerConfig
-    train_data_path: str
-    val_data_path: str | None = None
-    split_val_from_train: bool = True
+    vocab_path: str
+    merges_path: str
+    text_path: str
+    split_ratio: float = 0.9 # default attributes must be after non-default attributes
     batch_size: int = 32
     total_steps: int = 10000
     warmup_steps: int = 1000
@@ -47,7 +51,72 @@ class TrainingConfig:
     checkpoint_every: int = 1000
     checkpoint_path: str = "checkpoints/latest.pt"
 
-def build_model(config: ModelConfig):
+def train_bpe_and_write_to_file(
+    input_path: str,
+    output_vocab_path: str,
+    output_merges_path: str,
+    vocab_size: int = 10000,
+    special_tokens: list[str] = ["<|endoftext|>"]
+):
+    from implementation.bpe_advanced_impl import BPETrainer
+
+    bpe_trainer = BPETrainer(input_path=input_path, vocab_size=vocab_size, special_tokens=special_tokens)
+    vocab, merges = bpe_trainer.train()
+    with open(output_vocab_path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(vocab))
+    with open(output_merges_path, "w", encoding="utf-8") as f:
+        for b1, b2 in merges:
+            f.write(f"{b1.decode('utf-8')} {b2.decode('utf-8')}\n")
+
+def encode_text_input(
+    vocab_path: str,
+    merges_path: str,
+    text_path: str,
+    special_tokens: list[str] = ["<|endoftext|>"]
+) -> list[int]:
+    
+    from implementation.bpe_cppyy import Tokenizer
+
+    with open(vocab_path, "r", encoding="utf-8") as f:
+        vocab = json.load(f)
+    merges = []
+    with open(merges_path, "r", encoding="utf-8") as f:
+        for line in f:
+            cleaned = line.rstrip()
+            if cleaned and len(cleaned.split(" ")) == 2:
+                a, b = cleaned.split(" ")
+                merges.append((a.encode("utf-8"), b.encode("utf-8")))
+    tokenizer = Tokenizer(vocab, merges, special_tokens=special_tokens)
+    with open(text_path, "r", encoding="utf-8") as f:
+        text = f.read()
+    return tokenizer.encode(text)
+
+def build_model_and_dataset(
+    config: ModelConfig, 
+    vocab_path: str,
+    merges_path: str,
+    text_path: str,
+    vocab_size: int,
+    special_tokens: list[str] = ["<|endoftext|>"]
+) -> Tuple[Transformer, np.ndarray]:
+    if not os.path.exists(vocab_path) or not os.path.exists(merges_path):
+        train_bpe_and_write_to_file(
+            input_path=text_path,
+            output_vocab_path=vocab_path,
+            output_merges_path=merges_path,
+            vocab_size=vocab_size,
+            special_tokens=special_tokens
+        )
+
+    token_ids = encode_text_input(
+        vocab_path=vocab_path,
+        merges_path=merges_path,
+        text_path=text_path,
+        special_tokens=special_tokens
+    )
+    
+    data_array = np.array(token_ids, dtype=np.int32)
+
     if config.weights is None:
         weights = {}
         for i in range(config.num_layers):
@@ -65,8 +134,8 @@ def build_model(config: ModelConfig):
         weights["lm_head.weight"] = torch.empty((config.vocab_size, config.d_model))
         config.weights = weights
     return Transformer(
-        **config
-    )
+        **vars(config)
+    ), data_array
 
 def build_optimizer(model: Transformer, config: OptimizerConfig):
     return AdamW(
@@ -92,7 +161,7 @@ def train_step(
     loss.backward()
 
     if max_grad_norm is not None:
-        clip_gradients(model, max_grad_norm)
+        clip_gradients(model.parameters(), max_grad_norm)
     optimizer.step()
     optimizer.zero_grad()
     return loss.detach()
@@ -100,21 +169,15 @@ def train_step(
 def train(config: TrainingConfig):
     train_data = None
     val_data = None
-    if config.split_val_from_train:
-        entire_dataset = np.memmap(config.train_data_path, dtype=np.int32, mode='r')
-        split_idx = int(len(entire_dataset) * 0.9)
-        train_data = entire_dataset[:split_idx]
-        val_data = entire_dataset[split_idx:]
-    else:
-        train_data = np.memmap(config.train_data_path, dtype=np.int32, mode='r')
-        val_data = np.memmap(config.val_data_path, dtype=np.int32, mode='r')
-
-    model = build_model(config.model).to(config.device)
+    model, dataset = build_model_and_dataset(config.model, config.vocab_path, config.merges_path, config.text_path, config.model.vocab_size)
+    model.to(config.device)
+    train_data = dataset[:int(len(dataset) * config.split_ratio)]
+    val_data = dataset[int(len(dataset) * config.split_ratio):]
     optimizer = build_optimizer(model, config.optimizer)
     loss_func = CrossEntropyLoss()
 
-    train_data_loader = DataLoader(train_data, config.batch_size, config.context_length, config.device)
-    val_data_loader = DataLoader(val_data, config.batch_size, config.context_length, config.device)
+    train_data_loader = DataLoader(train_data, config.batch_size, config.model.context_length, config.device)
+    val_data_loader = DataLoader(val_data, config.batch_size, config.model.context_length, config.device)
 
     optimizer = AdamW(
         model.parameters(),
