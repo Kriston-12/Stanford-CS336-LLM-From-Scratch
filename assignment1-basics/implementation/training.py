@@ -116,26 +116,8 @@ def build_model_and_dataset(
     )
     
     data_array = np.array(token_ids, dtype=np.int32)
-
-    if config.weights is None:
-        weights = {}
-        for i in range(config.num_layers):
-            weights[f"layers.{i}.attn.q_proj.weight"] = torch.empty((config.d_model, config.d_model))
-            weights[f"layers.{i}.attn.k_proj.weight"] = torch.empty((config.d_model, config.d_model))
-            weights[f"layers.{i}.attn.v_proj.weight"] = torch.empty((config.d_model, config.d_model))
-            weights[f"layers.{i}.attn.output_proj.weight"] = torch.empty((config.d_model, config.d_model))
-            weights[f"layers.{i}.ln1.weight"] = torch.empty((config.d_model,))
-            weights[f"layers.{i}.ffn.w1.weight"] = torch.empty((config.d_ff, config.d_model))
-            weights[f"layers.{i}.ffn.w3.weight"] = torch.empty((config.d_ff, config.d_model))
-            weights[f"layers.{i}.ffn.w2.weight"] = torch.empty((config.d_model, config.d_ff))
-            weights[f"layers.{i}.ln2.weight"] = torch.empty((config.d_model,))
-        weights["token_embeddings.weight"] = torch.empty((config.vocab_size, config.d_model))
-        weights["ln_final.weight"] = torch.empty((config.d_model,))
-        weights["lm_head.weight"] = torch.empty((config.vocab_size, config.d_model))
-        config.weights = weights
-    return Transformer(
-        **vars(config)
-    ), data_array
+    model = Transformer(**vars(config))
+    return model, data_array
 
 def build_optimizer(model: Transformer, config: OptimizerConfig):
     return AdamW(
@@ -151,13 +133,12 @@ def train_step(
     optimizer: AdamW,
     loss_func: CrossEntropyLoss,
     data_loader: DataLoader,
-    device: str,
     max_grad_norm: float | None = None,
 ) -> Tensor:
     model.train()
     x, y = data_loader.get_batch()
-    y_pred = model(x) 
-    loss = loss_func(y_pred, y)
+    y_pred = model(x).view(-1, model.lm_head.shape[0]) # (batch_size * seq_len, vocab_size)
+    loss = loss_func(y_pred, y.reshape(-1))
     loss.backward()
 
     if max_grad_norm is not None:
@@ -167,8 +148,6 @@ def train_step(
     return loss.detach()
 
 def train(config: TrainingConfig):
-    train_data = None
-    val_data = None
     model, dataset = build_model_and_dataset(config.model, config.vocab_path, config.merges_path, config.text_path, config.model.vocab_size)
     model.to(config.device)
     train_data = dataset[:int(len(dataset) * config.split_ratio)]
@@ -179,13 +158,6 @@ def train(config: TrainingConfig):
     train_data_loader = DataLoader(train_data, config.batch_size, config.model.context_length, config.device)
     val_data_loader = DataLoader(val_data, config.batch_size, config.model.context_length, config.device)
 
-    optimizer = AdamW(
-        model.parameters(),
-        lr=config.optimizer.lr,
-        weight_decay=config.optimizer.weight_decay,
-        betas=(config.optimizer.beta1, config.optimizer.beta2),
-        eps=config.optimizer.eps
-    )
     # Training loop to be done
     for step in range(config.total_steps):
         # Sample a batch of data
@@ -208,7 +180,6 @@ def train(config: TrainingConfig):
             optimizer=optimizer,
             loss_func=loss_func,
             data_loader=train_data_loader,
-            device=config.device,
             max_grad_norm=config.optimizer.max_grad_norm
         )
 
@@ -222,11 +193,46 @@ def train(config: TrainingConfig):
             with torch.no_grad():
                 for _ in range(len(val_data_loader)):
                     x_val, y_val = val_data_loader.get_batch()
-                    y_val_pred = model(x_val)
-                    val_loss += loss_func(y_val_pred, y_val).item()
+                    y_val_pred = model(x_val).view(-1, model.lm_head.shape[0])
+                    val_loss += loss_func(y_val_pred, y_val.reshape(-1)).item()
                     num_batches += 1
-            avg_val_loss = val_loss / num_batches
-            print(f"Step {step}: Validation Loss = {avg_val_loss:.4f}")
+            if num_batches > 0:
+                avg_val_loss = val_loss / num_batches
+                print(f"Step {step}: Validation Loss = {avg_val_loss:.4f}")
         
         if step % config.checkpoint_every == 0:
             save_checkpoint(model, optimizer, step, config.checkpoint_path)
+
+if __name__ == "__main__":
+    config = TrainingConfig(
+        model=ModelConfig(
+            vocab_size=10000,
+            context_length=256,
+            d_model=512,
+            num_layers=6,
+            num_heads=8,
+            d_ff=1344
+        ),
+        optimizer=OptimizerConfig(
+            lr=3e-4,
+            weight_decay=0.01,
+            beta1=0.9,
+            beta2=0.999,
+            eps=1e-8,
+            max_grad_norm=1.0
+        ),
+        vocab_path="vocab.json",
+        merges_path="merges.txt",
+        text_path="../data/tinystories_example.txt",
+        split_ratio=0.9,
+        batch_size=327680000 // 256 // 1000, # 327680000 tokens in total, divided by context length and total steps
+        total_steps=1000,
+        warmup_steps=1000,
+        min_lr=3e-5,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        eval_every=500,
+        log_every=50,
+        checkpoint_every=1000,
+        checkpoint_path="checkpoints/latest.pt"
+    )
+    train(config)

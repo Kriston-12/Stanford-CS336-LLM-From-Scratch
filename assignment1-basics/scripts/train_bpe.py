@@ -8,7 +8,7 @@ import resource
 import time
 from pathlib import Path
 
-from implementation.advance_impl import BPETrainer
+from implementation.bpe_advanced_impl import BPETrainer
 from contextlib import contextmanager
 
 def _rss_gb() -> float:
@@ -21,7 +21,6 @@ def _b64(b: bytes) -> str:
 def decode_b64(s: str) -> bytes:
     return base64.b64decode(s.encode("ascii"))
 
-
 def _train(path: str, vocab_size: int, num_chunks: int) \
         -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
         trainer = BPETrainer(
@@ -30,7 +29,7 @@ def _train(path: str, vocab_size: int, num_chunks: int) \
             special_tokens=["<|endoftext|>"],
             disired_num_chunks=num_chunks,
         )
-        return trainer.train(num_merges=vocab_size)
+        return trainer.train()
 
 @contextmanager
 def profile(out_folder: Path, sort_by: str = "cumulative", top_n: int = 50):
@@ -180,6 +179,8 @@ def scalene_main():
     # explorer.exe "$(wslpath -w artifacts/scalene_openwebtext.html)"
     # Then open the generated HTML report in artifacts/scalene_profile/ to analyze the performance.
 
+    # profile all to get traced scalene results.
+    # uv run scalene --html --profile-all --outfile artifacts/scalene_sp.html --- scripts/train_bpe.py -i data/openwebtext_50k.txt -v 32000 -n 8
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "-i", "--input",
@@ -198,5 +199,6 @@ def scalene_main():
 
 if __name__ == "__main__":
     # main_profiled()
+    main_coarse_time_mem_with_summary()
     # perf_main()
-    scalene_main()
+    # scalene_main()
