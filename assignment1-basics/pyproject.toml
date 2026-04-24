@@ -23,6 +23,8 @@ dependencies = [
     "tqdm",
     "datasets",
     "scalene<1.5.40",
+    "cppyy",
+    "tensorboard",
 ]
 
 [build-system]

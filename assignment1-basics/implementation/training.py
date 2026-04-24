@@ -1,3 +1,4 @@
+import base64
 import torch
 from torch import Tensor
 from dataclasses import dataclass
@@ -12,6 +13,11 @@ import numpy as np
 import json
 import os
 from typing import Tuple
+# import matplotlib 
+# import matplotlib.pyplot as plt
+from torch.utils.tensorboard import SummaryWriter
+
+# matplotlib.use('Agg') # Use a non-interactive backend for matplotlib
 
 @dataclass
 class ModelConfig:
@@ -43,13 +49,21 @@ class TrainingConfig:
     split_ratio: float = 0.9 # default attributes must be after non-default attributes
     batch_size: int = 32
     total_steps: int = 10000
-    warmup_steps: int = 1000
-    min_lr: float = 3e-5
+    warmup_steps: int = total_steps * 0.1
+    consine_cycle_iters: int = total_steps - 2 * warmup_steps
+    max_learning_rate: float = 3e-4
+    min_learning_rate: float = 3e-5
     device: str = "cuda"
     eval_every: int = 500
     log_every: int = 50
     checkpoint_every: int = 1000
     checkpoint_path: str = "checkpoints/latest.pt"
+
+def _b64(b: bytes) -> str:
+    return base64.b64encode(b).decode("ascii")
+
+def _unb64(s: str) -> bytes:
+    return base64.b64decode(s.encode("ascii"))
 
 def train_bpe_and_write_to_file(
     input_path: str,
@@ -63,10 +77,10 @@ def train_bpe_and_write_to_file(
     bpe_trainer = BPETrainer(input_path=input_path, vocab_size=vocab_size, special_tokens=special_tokens)
     vocab, merges = bpe_trainer.train()
     with open(output_vocab_path, "w", encoding="utf-8") as f:
-        f.write(json.dumps(vocab))
+        f.write(json.dumps({k: _b64(v) for k, v in vocab.items()}))
     with open(output_merges_path, "w", encoding="utf-8") as f:
         for b1, b2 in merges:
-            f.write(f"{b1.decode('utf-8')} {b2.decode('utf-8')}\n")
+            f.write(f"{_b64(b1)} {_b64(b2)}\n")
 
 def encode_text_input(
     vocab_path: str,
@@ -79,13 +93,14 @@ def encode_text_input(
 
     with open(vocab_path, "r", encoding="utf-8") as f:
         vocab = json.load(f)
+        vocab = {int(k): _unb64(v) for k, v in vocab.items()}
     merges = []
     with open(merges_path, "r", encoding="utf-8") as f:
         for line in f:
             cleaned = line.rstrip()
             if cleaned and len(cleaned.split(" ")) == 2:
                 a, b = cleaned.split(" ")
-                merges.append((a.encode("utf-8"), b.encode("utf-8")))
+                merges.append((_unb64(a), _unb64(b)))
     tokenizer = Tokenizer(vocab, merges, special_tokens=special_tokens)
     with open(text_path, "r", encoding="utf-8") as f:
         text = f.read()
@@ -134,7 +149,7 @@ def train_step(
     loss_func: CrossEntropyLoss,
     data_loader: DataLoader,
     max_grad_norm: float | None = None,
-) -> Tensor:
+) -> Tuple[Tensor, Tensor]:
     model.train()
     x, y = data_loader.get_batch()
     y_pred = model(x).view(-1, model.lm_head.shape[0]) # (batch_size * seq_len, vocab_size)
@@ -142,10 +157,10 @@ def train_step(
     loss.backward()
 
     if max_grad_norm is not None:
-        clip_gradients(model.parameters(), max_grad_norm)
+        grad_norm: torch.Tensor = clip_gradients(model.parameters(), max_grad_norm)
     optimizer.step()
     optimizer.zero_grad()
-    return loss.detach()
+    return loss.detach(), grad_norm
 
 def train(config: TrainingConfig):
     model, dataset = build_model_and_dataset(config.model, config.vocab_path, config.merges_path, config.text_path, config.model.vocab_size)
@@ -157,6 +172,12 @@ def train(config: TrainingConfig):
 
     train_data_loader = DataLoader(train_data, config.batch_size, config.model.context_length, config.device)
     val_data_loader = DataLoader(val_data, config.batch_size, config.model.context_length, config.device)
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    writer = SummaryWriter(str(os.path.join(current_dir, "runs", "exp_tinystories")))
+
+    # losses = []
+    # lrs = []
+    # grad_norms = []
 
     # Training loop to be done
     for step in range(config.total_steps):
@@ -166,22 +187,29 @@ def train(config: TrainingConfig):
         # Backward pass and optimization step
         # Logging and checkpointing
         lr = consine_lr_schedule(
-            step=step,
-            warmup_steps=config.warmup_steps,
-            total_steps=config.total_steps,
-            base_lr=config.optimizer.lr,
-            min_lr=config.min_lr
+            it=step,
+            warmup_iters=config.warmup_steps,
+            max_learning_rate=config.max_learning_rate,
+            min_learning_rate=config.min_learning_rate,
+            cosine_cycle_iters=config.consine_cycle_iters
         )
+        # lrs.append(lr)
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
-        train_loss = train_step(
+        train_loss, grad_norm = train_step(
             model=model,
             optimizer=optimizer,
             loss_func=loss_func,
             data_loader=train_data_loader,
             max_grad_norm=config.optimizer.max_grad_norm
         )
+        # losses.append(train_loss.item())
+        # grad_norms.append(grad_norm.item())
+
+        writer.add_scalar("Train Loss", train_loss.item(), step)
+        writer.add_scalar("Learning Rate", lr, step)
+        writer.add_scalar("Grad Norm", grad_norm.item(), step)
 
         if step % config.log_every == 0:
             print(f"Step {step}: Train Loss = {train_loss.item():.4f}, LR = {lr:.6f}")
@@ -202,6 +230,7 @@ def train(config: TrainingConfig):
         
         if step % config.checkpoint_every == 0:
             save_checkpoint(model, optimizer, step, config.checkpoint_path)
+    writer.close()
 
 if __name__ == "__main__":
     config = TrainingConfig(
@@ -223,12 +252,13 @@ if __name__ == "__main__":
         ),
         vocab_path="vocab.json",
         merges_path="merges.txt",
-        text_path="../data/tinystories_example.txt",
+        text_path= os.path.join("tests", "fixtures", "tinystories_sample.txt"),
         split_ratio=0.9,
         batch_size=327680000 // 256 // 1000, # 327680000 tokens in total, divided by context length and total steps
         total_steps=1000,
-        warmup_steps=1000,
-        min_lr=3e-5,
+        warmup_steps= 1000 * 0.1,
+        max_learning_rate=3e-4,
+        min_learning_rate=3e-5,
         device="cuda" if torch.cuda.is_available() else "cpu",
         eval_every=500,
         log_every=50,
