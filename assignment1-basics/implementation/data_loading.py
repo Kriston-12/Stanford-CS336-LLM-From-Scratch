@@ -37,6 +37,9 @@ class DataLoader:
         label_sequences = torch.stack([torch.from_numpy(self.dataset[i + 1: i + self.context_length + 1]) for i in start_indices], dim=0)
         return input_sequences.to(self.device), label_sequences.to(self.device)
 
+    def __len__(self):
+        return len(self.dataset) // self.batch_size
+
 def load_data(
     dataset: ndarray,
     batch_size: int,
