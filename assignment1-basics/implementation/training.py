@@ -58,6 +58,7 @@ class TrainingConfig:
     log_every: int = 50
     checkpoint_every: int = 1000
     checkpoint_path: str = "checkpoints/latest.pt"
+    run_name: str = "default_run"
 
 def _b64(b: bytes) -> str:
     return base64.b64encode(b).decode("ascii")
@@ -233,11 +234,17 @@ def train(config: TrainingConfig):
     writer.close()
 
 if __name__ == "__main__":
-    config = TrainingConfig(
-        model=ModelConfig(
-            vocab_size=10000,
-            context_length=256,
-            d_model=512,
+    learning_rates_to_test = [1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2]
+    print(f"\n{'='*40}")
+    print(f"Starting sweep for max_learning_rate = {lr}")
+    print(f"{'='*40}\n")
+
+    for lr in learning_rates_to_test:
+        config = TrainingConfig(
+            model=ModelConfig(
+                vocab_size=10000,
+                context_length=256,
+                d_model=512,
             num_layers=6,
             num_heads=8,
             d_ff=1344
@@ -254,16 +261,17 @@ if __name__ == "__main__":
         merges_path="merges.txt",
         text_path= os.path.join("tests", "fixtures", "tinystories_sample.txt"),
         split_ratio=0.9,
-        batch_size=327680000 // 256 // 1000, # 327680000 tokens in total, divided by context length and total steps
-        total_steps=1000,
-        warmup_steps= 1000 * 0.1,
+        batch_size=327680000 // 256 // 3000, # 327680000 tokens in total, divided by context length and total steps
+        total_steps=3000,
+        warmup_steps= 3000 * 0.1,
         max_learning_rate=3e-4,
         min_learning_rate=3e-5,
         device="cuda" if torch.cuda.is_available() else "cpu",
         eval_every=500,
         log_every=50,
         checkpoint_every=1000,
-        checkpoint_path="checkpoints/latest.pt"
+        checkpoint_path="checkpoints/run_lr_{lr}.pt",
+        run_name=f"lr_sweep_{lr}"
     )
     os.makedirs(os.path.dirname(config.checkpoint_path), exist_ok=True)
     train(config)
