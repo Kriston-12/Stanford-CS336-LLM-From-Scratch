@@ -265,4 +265,5 @@ if __name__ == "__main__":
         checkpoint_every=1000,
         checkpoint_path="checkpoints/latest.pt"
     )
+    os.makedirs(os.path.dirname(config.checkpoint_path), exist_ok=True)
     train(config)
