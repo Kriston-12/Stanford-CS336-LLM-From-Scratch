@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import torch
 from torch import Tensor
 from dataclasses import dataclass
@@ -66,6 +67,20 @@ def _b64(b: bytes) -> str:
 def _unb64(s: str) -> bytes:
     return base64.b64decode(s.encode("ascii"))
 
+def _tokenizer_artifact_paths(
+    vocab_path: str,
+    merges_path: str,
+    text_path: str,
+) -> tuple[str, str]:
+    text_stem = os.path.splitext(os.path.basename(text_path))[0]
+
+    vocab_root, vocab_ext = os.path.splitext(vocab_path)
+    merges_root, merges_ext = os.path.splitext(merges_path)
+
+    resolved_vocab_path = f"{vocab_root}_{text_stem}{vocab_ext or '.json'}"
+    resolved_merges_path = f"{merges_root}_{text_stem}{merges_ext or '.txt'}"
+    return resolved_vocab_path, resolved_merges_path
+
 def train_bpe_and_write_to_file(
     input_path: str,
     output_vocab_path: str,
@@ -115,18 +130,24 @@ def build_model_and_dataset(
     vocab_size: int,
     special_tokens: list[str] = ["<|endoftext|>"]
 ) -> Tuple[Transformer, np.ndarray]:
-    if not os.path.exists(vocab_path) or not os.path.exists(merges_path):
+    resolved_vocab_path, resolved_merges_path = _tokenizer_artifact_paths(
+        vocab_path=vocab_path,
+        merges_path=merges_path,
+        text_path=text_path
+    )
+
+    if not os.path.exists(resolved_vocab_path) or not os.path.exists(resolved_merges_path):
         train_bpe_and_write_to_file(
             input_path=text_path,
-            output_vocab_path=vocab_path,
-            output_merges_path=merges_path,
+            output_vocab_path=resolved_vocab_path,
+            output_merges_path=resolved_merges_path,
             vocab_size=vocab_size,
             special_tokens=special_tokens
         )
 
     token_ids = encode_text_input(
-        vocab_path=vocab_path,
-        merges_path=merges_path,
+        vocab_path=resolved_vocab_path,
+        merges_path=resolved_merges_path,
         text_path=text_path,
         special_tokens=special_tokens
     )
@@ -235,43 +256,46 @@ def train(config: TrainingConfig):
 
 if __name__ == "__main__":
     learning_rates_to_test = [1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2]
-    print(f"\n{'='*40}")
-    print(f"Starting sweep for max_learning_rate = {lr}")
-    print(f"{'='*40}\n")
+    batch_size_to_test = [32, 64, 128, 256, 512, 1024]
 
     for lr in learning_rates_to_test:
-        config = TrainingConfig(
-            model=ModelConfig(
+        for batch_size in batch_size_to_test:
+            print(f"\n{'='*40}")
+            print(f"Starting sweep for max_learning_rate = {lr}, batch_size = {batch_size}")
+            print(f"{'='*40}\n")
+            config = TrainingConfig(
+                model=ModelConfig(
                 vocab_size=10000,
                 context_length=256,
                 d_model=512,
-            num_layers=6,
-            num_heads=8,
-            d_ff=1344
-        ),
-        optimizer=OptimizerConfig(
-            lr=3e-4,
-            weight_decay=0.01,
-            beta1=0.9,
-            beta2=0.999,
-            eps=1e-8,
-            max_grad_norm=1.0
-        ),
-        vocab_path="vocab.json",
-        merges_path="merges.txt",
-        text_path= os.path.join("tests", "fixtures", "tinystories_sample.txt"),
-        split_ratio=0.9,
-        batch_size=327680000 // 256 // 3000, # 327680000 tokens in total, divided by context length and total steps
-        total_steps=3000,
-        warmup_steps= 3000 * 0.1,
-        max_learning_rate=3e-4,
-        min_learning_rate=3e-5,
-        device="cuda" if torch.cuda.is_available() else "cpu",
-        eval_every=500,
-        log_every=50,
-        checkpoint_every=1000,
-        checkpoint_path="checkpoints/run_lr_{lr}.pt",
-        run_name=f"lr_sweep_{lr}"
-    )
-    os.makedirs(os.path.dirname(config.checkpoint_path), exist_ok=True)
-    train(config)
+                num_layers=6,
+                num_heads=8,
+                d_ff=1344
+            ),
+            optimizer=OptimizerConfig(
+                lr=3e-4,
+                weight_decay=0.01,
+                beta1=0.9,
+                beta2=0.999,
+                eps=1e-8,
+                max_grad_norm=1.0
+            ),
+            vocab_path="vocab.json",
+            merges_path="merges.txt",
+            text_path= os.path.join("tests", "fixtures", "tinystories_sample_5M.txt"),
+            split_ratio=0.9,
+            # batch_size=3276800 // 256 // 3000, # 327680000 tokens in total, divided by context length and total steps
+            batch_size=batch_size,
+            total_steps=3000,
+            warmup_steps= 3000 * 0.1,
+            max_learning_rate=3e-4,
+            min_learning_rate=3e-5,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            eval_every=500,
+            log_every=50,
+            checkpoint_every=1000,
+            checkpoint_path=f"checkpoints/run_lr_{lr}.pt",
+            run_name=f"lr_sweep_{lr}"
+        )
+        os.makedirs(os.path.dirname(config.checkpoint_path), exist_ok=True)
+        train(config)
