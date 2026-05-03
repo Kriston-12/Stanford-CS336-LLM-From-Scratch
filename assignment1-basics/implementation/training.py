@@ -7,6 +7,7 @@ from implementation.checkpointing import save_checkpoint, load_checkpoint
 from implementation.data_loading import DataLoader
 from implementation.consineLR_scheduler import consine_lr_schedule
 from implementation.AdamW import AdamW
+from implementation.tokenizer import Tokenizer
 from implementation.transformer_LM import Transformer
 from implementation.cross_entropy import CrossEntropyLoss
 from implementation.gradient_clipper import clip_gradients
@@ -253,6 +254,21 @@ def train(config: TrainingConfig):
         if step % config.checkpoint_every == 0:
             save_checkpoint(model, optimizer, step, config.checkpoint_path)
     writer.close()
+
+def generate_text(model: Transformer, tokenizer: Tokenizer, prompt: str, device: str, max_length: int = 100) -> str:
+    from implementation.decoding import decode
+    input_ids = tokenizer.encode(prompt)
+    generate_token_ids = decode(
+        model=model,
+        prompt_token_ids=torch.tensor([input_ids], device=device),
+        max_number_of_tokens=max_length,
+        temperature=1.0,
+        top_p_threshold=1.0,
+        end_token_ids=None
+    )[0].tolist()
+    return tokenizer.decode(generate_token_ids)
+    
+
 
 if __name__ == "__main__":
     learning_rates_to_test = [1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2]
