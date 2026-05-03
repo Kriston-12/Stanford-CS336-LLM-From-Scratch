@@ -14,12 +14,8 @@ from implementation.gradient_clipper import clip_gradients
 import numpy as np
 import json
 import os
-from typing import Tuple
-# import matplotlib 
-# import matplotlib.pyplot as plt
+from typing import Tuple, Optional
 from torch.utils.tensorboard import SummaryWriter
-
-# matplotlib.use('Agg') # Use a non-interactive backend for matplotlib
 
 @dataclass
 class ModelConfig:
@@ -48,14 +44,25 @@ class TrainingConfig:
     vocab_path: str
     merges_path: str
     text_path: str
-    split_ratio: float = 0.9 # default attributes must be after non-default attributes
+
+    # data / runtime
+    split_ratio: float = 0.9
+    device: str = "cuda"
+
+    # token budget (fixed for fair comparison across runs)
+    total_tokens: int = 327_680_000
+
+    # per-step shape
     batch_size: int = 32
-    total_steps: int = 10000
-    warmup_steps: int = total_steps * 0.1
-    consine_cycle_iters: int = total_steps - 2 * warmup_steps
+    total_steps: int = 0  # will be auto-filled if 0
+    grad_accum_steps: int = 1
+
+    # LR schedule
     max_learning_rate: float = 3e-4
     min_learning_rate: float = 3e-5
-    device: str = "cuda"
+    warmup_frac: float = 0.1  # warmup_steps = int(total_steps * warmup_frac)
+
+    # logging / eval / ckpt
     eval_every: int = 500
     log_every: int = 50
     checkpoint_every: int = 1000
@@ -166,77 +173,162 @@ def build_optimizer(model: Transformer, config: OptimizerConfig):
         eps=config.eps
     )
 
+def _compute_steps_and_accum(
+    *,
+    total_tokens: int,
+    context_length: int,
+    batch_size: int,
+    requested_steps: int,
+    requested_grad_accum: int,
+) -> tuple[int, int, int]:
+    """
+    Returns (total_steps, grad_accum_steps, achieved_total_tokens) while trying to:
+    - keep total_tokens fixed
+    - respect requested_steps if > 0, else infer steps
+    - respect requested_grad_accum if > 0
+    """
+    assert batch_size > 0 and context_length > 0
+    assert total_tokens > 0
+
+    tokens_per_micro_step = batch_size * context_length
+    if tokens_per_micro_step <= 0:
+        raise ValueError("tokens_per_micro_step must be > 0")
+
+    # If user provided total_steps, we solve for grad_accum (>=1).
+    if requested_steps and requested_steps > 0:
+        total_steps = int(requested_steps)
+        denom = tokens_per_micro_step * total_steps
+        grad_accum_steps = max(1, int(round(total_tokens / denom)))
+        achieved = tokens_per_micro_step * total_steps * grad_accum_steps
+        return total_steps, grad_accum_steps, achieved
+
+    # Else infer total_steps given grad_accum (default 1)
+    grad_accum_steps = max(1, int(requested_grad_accum))
+    denom = tokens_per_micro_step * grad_accum_steps
+    total_steps = max(1, int(round(total_tokens / denom)))
+    achieved = tokens_per_micro_step * total_steps * grad_accum_steps
+    return total_steps, grad_accum_steps, achieved
+
 def train_step(
     model: Transformer,
     optimizer: AdamW,
     loss_func: CrossEntropyLoss,
     data_loader: DataLoader,
+    *,
     max_grad_norm: float | None = None,
+    grad_accum_steps: int = 1,
 ) -> Tuple[Tensor, Tensor]:
+    """
+    One *optimizer step* worth of work, implemented via grad accumulation:
+    - do grad_accum_steps micro-batches
+    - average the loss
+    - (optional) clip grads
+    - optimizer.step()
+
+    Returns (loss, grad_norm).
+    """
     model.train()
-    x, y = data_loader.get_batch()
-    y_pred = model(x).view(-1, model.lm_head.shape[0]) # (batch_size * seq_len, vocab_size)
-    loss = loss_func(y_pred, y.reshape(-1))
-    loss.backward()
+    optimizer.zero_grad(set_to_none=True)
+
+    grad_accum_steps = max(1, int(grad_accum_steps))
+    loss_total: Tensor | None = None
+
+    for _ in range(grad_accum_steps):
+        x, y = data_loader.get_batch()
+        y_pred = model(x).view(-1, model.lm_head.shape[0])  # (B*T, V)
+        loss = loss_func(y_pred, y.reshape(-1))
+        loss = loss / grad_accum_steps  # average over micro-batches
+        loss.backward()
+        loss_total = loss.detach() if loss_total is None else (loss_total + loss.detach())
 
     if max_grad_norm is not None:
         grad_norm: torch.Tensor = clip_gradients(model.parameters(), max_grad_norm)
+    else:
+        grad_norm = torch.tensor(float("nan"), device=next(model.parameters()).device)
+
     optimizer.step()
-    optimizer.zero_grad()
-    return loss.detach(), grad_norm
+    return loss_total, grad_norm
 
 def train(config: TrainingConfig):
-    model, dataset = build_model_and_dataset(config.model, config.vocab_path, config.merges_path, config.text_path, config.model.vocab_size)
+    # derive steps/accum to keep tokens fixed
+    total_steps, grad_accum_steps, achieved_tokens = _compute_steps_and_accum(
+        total_tokens=config.total_tokens,
+        context_length=config.model.context_length,
+        batch_size=config.batch_size,
+        requested_steps=config.total_steps,
+        requested_grad_accum=config.grad_accum_steps,
+    )
+    warmup_steps = max(1, int(total_steps * float(config.warmup_frac)))
+    cosine_cycle_iters = max(1, total_steps - 2 * warmup_steps)
+
+    # build model/dataset
+    model, dataset = build_model_and_dataset(
+        config.model,
+        config.vocab_path,
+        config.merges_path,
+        config.text_path,
+        config.model.vocab_size,
+    )
     model.to(config.device)
+
     train_data = dataset[:int(len(dataset) * config.split_ratio)]
     val_data = dataset[int(len(dataset) * config.split_ratio):]
+
+    # IMPORTANT: optimizer lr can be anything; we overwrite per-step anyway.
     optimizer = build_optimizer(model, config.optimizer)
     loss_func = CrossEntropyLoss()
 
     train_data_loader = DataLoader(train_data, config.batch_size, config.model.context_length, config.device)
     val_data_loader = DataLoader(val_data, config.batch_size, config.model.context_length, config.device)
+
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    writer = SummaryWriter(str(os.path.join(current_dir, "runs", "exp_tinystories")))
+    run_dir = os.path.join(current_dir, "runs", config.run_name)
+    writer = SummaryWriter(run_dir)
 
-    # losses = []
-    # lrs = []
-    # grad_norms = []
+    # Log run metadata for reproducibility
+    writer.add_text("hparams/run_name", config.run_name, 0)
+    writer.add_text("hparams/text_path", config.text_path, 0)
+    writer.add_scalar("budget/total_tokens_target", float(config.total_tokens), 0)
+    writer.add_scalar("budget/total_tokens_achieved", float(achieved_tokens), 0)
+    writer.add_scalar("budget/batch_size", float(config.batch_size), 0)
+    writer.add_scalar("budget/context_length", float(config.model.context_length), 0)
+    writer.add_scalar("budget/total_steps", float(total_steps), 0)
+    writer.add_scalar("budget/grad_accum_steps", float(grad_accum_steps), 0)
 
-    # Training loop to be done
-    for step in range(config.total_steps):
-        # Sample a batch of data
-        # Forward pass
-        # Compute loss
-        # Backward pass and optimization step
-        # Logging and checkpointing
+    print(
+        f"[run={config.run_name}] target_tokens={config.total_tokens:,} "
+        f"achieved_tokens={achieved_tokens:,} "
+        f"(B={config.batch_size}, T={config.model.context_length}, "
+        f"steps={total_steps}, accum={grad_accum_steps})"
+    )
+
+    for step in range(total_steps):
         lr = consine_lr_schedule(
             it=step,
-            warmup_iters=config.warmup_steps,
+            warmup_iters=warmup_steps,
             max_learning_rate=config.max_learning_rate,
             min_learning_rate=config.min_learning_rate,
-            cosine_cycle_iters=config.consine_cycle_iters
+            cosine_cycle_iters=cosine_cycle_iters,
         )
-        # lrs.append(lr)
         for param_group in optimizer.param_groups:
-            param_group['lr'] = lr
+            param_group["lr"] = lr
 
         train_loss, grad_norm = train_step(
             model=model,
             optimizer=optimizer,
             loss_func=loss_func,
             data_loader=train_data_loader,
-            max_grad_norm=config.optimizer.max_grad_norm
+            max_grad_norm=config.optimizer.max_grad_norm,
+            grad_accum_steps=grad_accum_steps,
         )
-        # losses.append(train_loss.item())
-        # grad_norms.append(grad_norm.item())
 
-        writer.add_scalar("Train Loss", train_loss.item(), step)
-        writer.add_scalar("Learning Rate", lr, step)
-        writer.add_scalar("Grad Norm", grad_norm.item(), step)
+        writer.add_scalar("Train/Loss", float(train_loss.item()), step)
+        writer.add_scalar("Train/LearningRate", float(lr), step)
+        writer.add_scalar("Train/GradNorm", float(grad_norm.item()) if torch.isfinite(grad_norm).all() else float("nan"), step)
 
         if step % config.log_every == 0:
-            print(f"Step {step}: Train Loss = {train_loss.item():.4f}, LR = {lr:.6f}")
-        
+            print(f"[{config.run_name}] step {step}/{total_steps} loss={train_loss.item():.4f} lr={lr:.6g}")
+
         if step % config.eval_every == 0:
             model.eval()
             val_loss = 0.0
@@ -249,10 +341,13 @@ def train(config: TrainingConfig):
                     num_batches += 1
             if num_batches > 0:
                 avg_val_loss = val_loss / num_batches
-                print(f"Step {step}: Validation Loss = {avg_val_loss:.4f}")
-        
+                writer.add_scalar("Val/Loss", float(avg_val_loss), step)
+                print(f"[{config.run_name}] step {step}: val_loss={avg_val_loss:.4f}")
+
         if step % config.checkpoint_every == 0:
+            os.makedirs(os.path.dirname(config.checkpoint_path), exist_ok=True)
             save_checkpoint(model, optimizer, step, config.checkpoint_path)
+
     writer.close()
 
 def generate_text(model: Transformer, tokenizer: Tokenizer, prompt: str, device: str, max_length: int = 100) -> str:
@@ -271,47 +366,56 @@ def generate_text(model: Transformer, tokenizer: Tokenizer, prompt: str, device:
 
 
 if __name__ == "__main__":
-    learning_rates_to_test = [1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2]
-    batch_size_to_test = [32, 64, 128, 256, 512, 1024]
+    # Sweep design (log-scale is more standard than random)
+    learning_rates_to_test = [1e-4, 3e-4, 1e-3, 3e-3, 1e-2]
+    batch_sizes_to_test = [32, 64, 128, 256]
 
-    for lr in learning_rates_to_test:
-        for batch_size in batch_size_to_test:
-            print(f"\n{'='*40}")
-            print(f"Starting sweep for max_learning_rate = {lr}, batch_size = {batch_size}")
-            print(f"{'='*40}\n")
+    # Keep token budget fixed across runs
+    TOTAL_TOKENS = 327_680_000
+
+    for max_lr in learning_rates_to_test:
+        for bs in batch_sizes_to_test:
+            run_name = f"tinystories_lr{max_lr:g}_bs{bs}_tok{TOTAL_TOKENS}"
+
             config = TrainingConfig(
                 model=ModelConfig(
-                vocab_size=10000,
-                context_length=256,
-                d_model=512,
-                num_layers=6,
-                num_heads=8,
-                d_ff=1344
-            ),
-            optimizer=OptimizerConfig(
-                lr=3e-4,
-                weight_decay=0.01,
-                beta1=0.9,
-                beta2=0.999,
-                eps=1e-8,
-                max_grad_norm=1.0
-            ),
-            vocab_path="vocab.json",
-            merges_path="merges.txt",
-            text_path= os.path.join("tests", "fixtures", "tinystories_sample_5M.txt"),
-            split_ratio=0.9,
-            # batch_size=3276800 // 256 // 3000, # 327680000 tokens in total, divided by context length and total steps
-            batch_size=batch_size,
-            total_steps=3000,
-            warmup_steps= 3000 * 0.1,
-            max_learning_rate=3e-4,
-            min_learning_rate=3e-5,
-            device="cuda" if torch.cuda.is_available() else "cpu",
-            eval_every=500,
-            log_every=50,
-            checkpoint_every=1000,
-            checkpoint_path=f"checkpoints/run_lr_{lr}.pt",
-            run_name=f"lr_sweep_{lr}"
-        )
-        os.makedirs(os.path.dirname(config.checkpoint_path), exist_ok=True)
-        train(config)
+                    vocab_size=10000,
+                    context_length=256,
+                    d_model=512,
+                    num_layers=6,
+                    num_heads=8,
+                    d_ff=1344,
+                ),
+                optimizer=OptimizerConfig(
+                    lr=max_lr,  # initial lr (schedule overwrites anyway)
+                    weight_decay=0.01,
+                    beta1=0.9,
+                    beta2=0.999,
+                    eps=1e-8,
+                    max_grad_norm=1.0,
+                ),
+                vocab_path="vocab.json",
+                merges_path="merges.txt",
+                text_path=os.path.join("tests", "fixtures", "tinystories_sample_5M.txt"),
+                split_ratio=0.9,
+                device="cuda" if torch.cuda.is_available() else "cpu",
+                total_tokens=TOTAL_TOKENS,
+                batch_size=bs,
+                total_steps=0,          # let code infer steps to match total_tokens
+                grad_accum_steps=1,     # optionally set >1 if you want smaller micro-batches
+                max_learning_rate=max_lr,
+                min_learning_rate=max_lr / 10,
+                warmup_frac=0.1,
+                eval_every=500,
+                log_every=50,
+                checkpoint_every=1000,
+                checkpoint_path=f"checkpoints/{run_name}.pt",
+                run_name=run_name,
+            )
+
+            try:
+                train(config)
+            except RuntimeError as e:
+                # if a run OOM/diverges, keep sweep going
+                print(f"[FAILED] run={run_name} error={e}")
+                continue
