@@ -1,5 +1,4 @@
 import base64
-import hashlib
 import torch
 from torch import Tensor
 from dataclasses import dataclass
@@ -43,7 +42,8 @@ class TrainingConfig:
     optimizer: OptimizerConfig
     vocab_path: str
     merges_path: str
-    text_path: str
+    text_path_train: str
+    text_path_valid: str
 
     # data / runtime
     split_ratio: float = 0.9
@@ -134,35 +134,47 @@ def build_model_and_dataset(
     config: ModelConfig, 
     vocab_path: str,
     merges_path: str,
-    text_path: str,
+    text_path_train: str,
+    text_path_valid: str,
     vocab_size: int,
     special_tokens: list[str] = ["<|endoftext|>"]
-) -> Tuple[Transformer, np.ndarray]:
+) -> Tuple[Transformer, np.ndarray, np.ndarray]:
     resolved_vocab_path, resolved_merges_path = _tokenizer_artifact_paths(
         vocab_path=vocab_path,
         merges_path=merges_path,
-        text_path=text_path
+        text_path=text_path_train
     )
 
     if not os.path.exists(resolved_vocab_path) or not os.path.exists(resolved_merges_path):
         train_bpe_and_write_to_file(
-            input_path=text_path,
+            input_path=text_path_train,
             output_vocab_path=resolved_vocab_path,
             output_merges_path=resolved_merges_path,
             vocab_size=vocab_size,
             special_tokens=special_tokens
         )
 
-    token_ids = encode_text_input(
+    token_ids_train = encode_text_input(
         vocab_path=resolved_vocab_path,
         merges_path=resolved_merges_path,
-        text_path=text_path,
+        text_path=text_path_train,
         special_tokens=special_tokens
     )
     
-    data_array = np.array(token_ids, dtype=np.int32)
+
+    token_ids_valid = encode_text_input(
+        vocab_path=resolved_vocab_path,
+        merges_path=resolved_merges_path,
+        text_path=text_path_valid,
+        special_tokens=special_tokens
+    )
+
+    data_array_train = np.array(token_ids_train, dtype=np.int32)
+    data_array_valid = np.array(token_ids_valid, dtype=np.int32)
+    
     model = Transformer(**vars(config))
-    return model, data_array
+    
+    return model, data_array_train, data_array_valid
 
 def build_optimizer(model: Transformer, config: OptimizerConfig):
     return AdamW(
@@ -217,7 +229,7 @@ def train_step(
     *,
     max_grad_norm: float | None = None,
     grad_accum_steps: int = 1,
-) -> Tuple[Tensor, Tensor]:
+) -> Tuple[float, Tensor]:
     """
     One *optimizer step* worth of work, implemented via grad accumulation:
     - do grad_accum_steps micro-batches
@@ -231,7 +243,7 @@ def train_step(
     optimizer.zero_grad(set_to_none=True)
 
     grad_accum_steps = max(1, int(grad_accum_steps))
-    loss_total: Tensor | None = None
+    loss_total = 0.0
 
     for _ in range(grad_accum_steps):
         x, y = data_loader.get_batch()
@@ -239,7 +251,7 @@ def train_step(
         loss = loss_func(y_pred, y.reshape(-1))
         loss = loss / grad_accum_steps  # average over micro-batches
         loss.backward()
-        loss_total = loss.detach() if loss_total is None else (loss_total + loss.detach())
+        loss_total += loss.detach().item()
 
     if max_grad_norm is not None:
         grad_norm: torch.Tensor = clip_gradients(model.parameters(), max_grad_norm)
@@ -262,17 +274,21 @@ def train(config: TrainingConfig):
     cosine_cycle_iters = max(1, total_steps - 2 * warmup_steps)
 
     # build model/dataset
-    model, dataset = build_model_and_dataset(
+    model, dataset_train, dataset_valid = build_model_and_dataset(
         config.model,
         config.vocab_path,
         config.merges_path,
-        config.text_path,
+        config.text_path_train,
+        config.text_path_valid,
         config.model.vocab_size,
     )
     model.to(config.device)
 
-    train_data = dataset[:int(len(dataset) * config.split_ratio)]
-    val_data = dataset[int(len(dataset) * config.split_ratio):]
+    # train_data = dataset[:int(len(dataset) * config.split_ratio)]
+    # val_data = dataset[int(len(dataset) * config.split_ratio):]
+    
+    train_data = dataset_train
+    val_data = dataset_valid
 
     # IMPORTANT: optimizer lr can be anything; we overwrite per-step anyway.
     optimizer = build_optimizer(model, config.optimizer)
@@ -287,7 +303,7 @@ def train(config: TrainingConfig):
 
     # Log run metadata for reproducibility
     writer.add_text("hparams/run_name", config.run_name, 0)
-    writer.add_text("hparams/text_path", config.text_path, 0)
+    writer.add_text("hparams/text_path", config.text_path_train, 0)
     writer.add_scalar("budget/total_tokens_target", float(config.total_tokens), 0)
     writer.add_scalar("budget/total_tokens_achieved", float(achieved_tokens), 0)
     writer.add_scalar("budget/batch_size", float(config.batch_size), 0)
@@ -313,6 +329,7 @@ def train(config: TrainingConfig):
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
+        MAX_VAL_BATCHES = 50
         train_loss, grad_norm = train_step(
             model=model,
             optimizer=optimizer,
@@ -322,19 +339,19 @@ def train(config: TrainingConfig):
             grad_accum_steps=grad_accum_steps,
         )
 
-        writer.add_scalar("Train/Loss", float(train_loss.item()), step)
+        writer.add_scalar("Train/Loss", float(train_loss), step)
         writer.add_scalar("Train/LearningRate", float(lr), step)
         writer.add_scalar("Train/GradNorm", float(grad_norm.item()) if torch.isfinite(grad_norm).all() else float("nan"), step)
 
         if step % config.log_every == 0:
-            print(f"[{config.run_name}] step {step}/{total_steps} loss={train_loss.item():.4f} lr={lr:.6g}")
+            print(f"[{config.run_name}] step {step}/{total_steps} loss={train_loss:.4f} lr={lr:.6g}")
 
-        if step % config.eval_every == 0:
+        if step > 0 and step % config.eval_every == 0:
             model.eval()
             val_loss = 0.0
             num_batches = 0
             with torch.no_grad():
-                for _ in range(len(val_data_loader)):
+                for _ in range(MAX_VAL_BATCHES):
                     x_val, y_val = val_data_loader.get_batch()
                     y_val_pred = model(x_val).view(-1, model.lm_head.shape[0])
                     val_loss += loss_func(y_val_pred, y_val.reshape(-1)).item()
@@ -396,7 +413,8 @@ if __name__ == "__main__":
                 ),
                 vocab_path="vocab.json",
                 merges_path="merges.txt",
-                text_path=os.path.join("tests", "fixtures", "tinystories_sample_5M.txt"),
+                text_path_train=os.path.join("tests", "fixtures", "TinyStories-train.txt"),
+                text_path_valid=os.path.join("tests", "fixtures", "TinyStories-valid.txt"),
                 split_ratio=0.9,
                 device="cuda" if torch.cuda.is_available() else "cpu",
                 total_tokens=TOTAL_TOKENS,

@@ -35,7 +35,7 @@ class DataLoader:
         start_indices = torch.randint(low=0, high=len(self.dataset) - self.context_length, size=(self.batch_size,))
         input_sequences = torch.stack([torch.from_numpy(self.dataset[i: i + self.context_length]) for i in start_indices], dim=0)
         label_sequences = torch.stack([torch.from_numpy(self.dataset[i + 1: i + self.context_length + 1]) for i in start_indices], dim=0)
-        return input_sequences.to(self.device), label_sequences.to(self.device)
+        return input_sequences.pin_memory().to(self.device), label_sequences.pin_memory().to(self.device)
 
     def __len__(self):
         return len(self.dataset) // self.batch_size
@@ -45,8 +45,8 @@ def load_data(
     batch_size: int,
     context_length:int,
     device: str
-) -> tuple[torch.LongTensor, torch.LongTensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     start_indices = torch.randint(low=0, high=len(dataset) - context_length, size=(batch_size,))
     input_sequences = torch.stack([torch.from_numpy(dataset[i: i + context_length]) for i in start_indices], dim=0)
     label_sequences = torch.stack([torch.from_numpy(dataset[i + 1: i + 1 + context_length]) for i in start_indices], dim=0)
-    return input_sequences.to(device), label_sequences.to(device)
+    return input_sequences.pin_memory().to(device), label_sequences.pin_memory().to(device)
