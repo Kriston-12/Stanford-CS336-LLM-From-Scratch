@@ -308,12 +308,18 @@ def train(config: TrainingConfig):
     # Log run metadata for reproducibility
     writer.add_text("hparams/run_name", config.run_name, 0)
     writer.add_text("hparams/text_path", config.text_path_train, 0)
-    writer.add_scalar("budget/total_tokens_target", float(config.total_tokens), 0)
-    writer.add_scalar("budget/total_tokens_achieved", float(achieved_tokens), 0)
-    writer.add_scalar("budget/batch_size", float(config.batch_size), 0)
-    writer.add_scalar("budget/context_length", float(config.model.context_length), 0)
-    writer.add_scalar("budget/total_steps", float(total_steps), 0)
-    writer.add_scalar("budget/grad_accum_steps", float(grad_accum_steps), 0)
+    writer.add_text(
+        "hparams/budget",
+        (
+            f"target_tokens={config.total_tokens}, "
+            f"achieved_tokens={achieved_tokens}, "
+            f"batch_size={config.batch_size}, "
+            f"context_length={config.model.context_length}, "
+            f"total_steps={total_steps}, "
+            f"grad_accum_steps={grad_accum_steps}"
+        ),
+        0,
+    )
 
     print(
         f"[run={config.run_name}] target_tokens={config.total_tokens:,} "
