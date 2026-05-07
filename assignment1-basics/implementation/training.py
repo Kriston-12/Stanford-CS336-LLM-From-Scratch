@@ -16,6 +16,8 @@ import os
 from typing import Tuple, Optional
 from torch.utils.tensorboard import SummaryWriter
 
+DEBUG = True
+
 @dataclass
 class ModelConfig:
     vocab_size: int
@@ -146,6 +148,8 @@ def build_model_and_dataset(
     )
 
     if not os.path.exists(resolved_vocab_path) or not os.path.exists(resolved_merges_path):
+        if DEBUG:
+            print(f"Tokenizer artifacts not found at {resolved_vocab_path} and {resolved_merges_path}, training BPE tokenizer...")
         train_bpe_and_write_to_file(
             input_path=text_path_train,
             output_vocab_path=resolved_vocab_path,
@@ -329,7 +333,7 @@ def train(config: TrainingConfig):
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
-        MAX_VAL_BATCHES = 50
+        MAX_VAL_BATCHES = 100
         train_loss, grad_norm = train_step(
             model=model,
             optimizer=optimizer,
@@ -384,7 +388,8 @@ def generate_text(model: Transformer, tokenizer: Tokenizer, prompt: str, device:
 
 if __name__ == "__main__":
     # Sweep design (log-scale is more standard than random)
-    learning_rates_to_test = [1e-4, 3e-4, 1e-3, 3e-3, 1e-2]
+    # learning_rates_to_test = [1e-4, 3e-4, 1e-3, 3e-3, 1e-2]
+    learning_rates_to_test = [3e-4, 1e-3, 3e-3, 1e-2]
     batch_sizes_to_test = [32, 64, 128, 256]
 
     # Keep token budget fixed across runs
