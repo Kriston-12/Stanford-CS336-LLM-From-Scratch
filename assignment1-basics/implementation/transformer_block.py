@@ -70,30 +70,34 @@ class TransformerBlock(nn.Module):
         super().__init__()
         self.attention_rmsnorm = RMSNorm(d_model=d_model)
         self.ffn_rmsnorm = RMSNorm(d_model=d_model)
-        # self.rope = RoPE(d_k=num_heads, max_seq_len=max_seq_len)
 
         self.attention_block = MultiHeadAttention(
             d_model=d_model,
             num_heads=num_heads,
             theta=theta,
             max_seq_len=max_seq_len,
-            q_proj_weight=weights["attn.q_proj.weight"],
-            k_proj_weight=weights["attn.k_proj.weight"],
-            v_proj_weight=weights["attn.v_proj.weight"],
-            o_proj_weight=weights["attn.output_proj.weight"]
+            weights=None,
         )
 
         self.swiglu = SwiGLU(d_model=d_model, d_ff=d_ff)
+        if weights is not None:
+            self.load_reference_weights(weights)
 
-        # load refernece weights into parameters
-        # 没有下面这个no_grad会报错RuntimeError: a leaf Variable that requires grad is being used in an in-place operation.
-        # 这是因为torch不允许requires_grad=True的参数被in-place修改，因为这相当于修改了计算图chain中的activation，那么后续的auto diff全都会因为这个数值被影响
+    def load_reference_weights(self, weights: dict[str, torch.Tensor]) -> None:
+        self.attention_block.load_reference_weights(
+            {
+                "q_proj.weight": weights["attn.q_proj.weight"],
+                "k_proj.weight": weights["attn.k_proj.weight"],
+                "v_proj.weight": weights["attn.v_proj.weight"],
+                "o_proj.weight": weights["attn.output_proj.weight"],
+            }
+        )
+        self.swiglu.w1.load_weight(weights["ffn.w1.weight"])
+        self.swiglu.w2.load_weight(weights["ffn.w2.weight"])
+        self.swiglu.w3.load_weight(weights["ffn.w3.weight"])
         with torch.no_grad():
             self.attention_rmsnorm.g.copy_(weights["ln1.weight"])
             self.ffn_rmsnorm.g.copy_(weights["ln2.weight"])
-            self.swiglu.w1.weight.copy_(weights["ffn.w1.weight"])
-            self.swiglu.w2.weight.copy_(weights["ffn.w2.weight"])
-            self.swiglu.w3.weight.copy_(weights["ffn.w3.weight"])
         
     def forward(self, in_features: torch.Tensor) -> torch.Tensor:
         """

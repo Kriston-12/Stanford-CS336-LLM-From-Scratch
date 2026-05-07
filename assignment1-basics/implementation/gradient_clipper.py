@@ -25,7 +25,7 @@ class GradientClipper:
                 if p.grad is not None:
                     p.grad.data.mul_(clip_coef) # mul_ means multiply by clip_coef in place
 
-def clip_gradients(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float):
+def clip_gradients(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> torch.Tensor:
     total_norm = 0
     for p in parameters:
         if p.grad is not None:
@@ -36,3 +36,4 @@ def clip_gradients(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float)
         for p in parameters:
             if p.grad is not None:
                 p.grad.data.mul_(clip_coef)
+    return total_norm

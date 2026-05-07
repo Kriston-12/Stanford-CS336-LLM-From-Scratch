@@ -16,4 +16,5 @@ class CrossEntropyLoss(nn.Module):
         Float[Tensor, ""]: The average cross-entropy loss across examples.'''
     def forward(self, x: Tensor, targets: Tensor):
         log_probs = x.log_softmax(dim=-1)
-        return (-log_probs[torch.arange(x.shape[0]), targets]).mean()
+        row_idx = torch.arange(x.shape[0], device=x.device)
+        return (-log_probs[row_idx, targets]).mean()
