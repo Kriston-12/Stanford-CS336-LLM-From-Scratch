@@ -6,6 +6,7 @@ import numpy.typing as npt
 import argparse
 import numpy as np
 from timeit import default_timer as timer
+import torch
 
 def run_model_with_warmup(
     model: BasicsTransformerLM,
@@ -27,6 +28,7 @@ def run_model_with_warmup(
         loss.backward()
         optimizer.step()
 
+    torch.cuda.synchronize()
     forward_times = []
     backward_times = []
     optimizer_times = []
@@ -38,6 +40,7 @@ def run_model_with_warmup(
         outputs = model(inputs)
         timer_end = timer()
         forward_times.append(timer_end - timer_start)
+        torch.cuda.synchronize()  
         print(f"Forward time: {forward_times[-1]:.4f} seconds")
         loss = cross_entropy(outputs.view(-1, outputs.size(-1)), targets.view(-1))
         
@@ -46,11 +49,12 @@ def run_model_with_warmup(
         timer_end = timer()
         backward_times.append(timer_end - timer_start)
         print(f"Backward time: {backward_times[-1]:.4f} seconds")
-
+        torch.cuda.synchronize()  
         timer_start = timer()
         optimizer.step()
         timer_end = timer()
         optimizer_times.append(timer_end - timer_start)
+        torch.cuda.synchronize()  
         print(f"Optimizer step time: {optimizer_times[-1]:.4f} seconds")
 
     print(f"Average forward time: {np.mean(forward_times):.4f} seconds")
