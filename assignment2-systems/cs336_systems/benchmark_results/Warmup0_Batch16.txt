@@ -1,0 +1,128 @@
+Benchmark results for size: small
+Model: BasicsTransformerLM, Config: {'config': {'vocab_size': 10000, 'context_length': 512, 'd_model': 768, 'num_layers': 12, 'num_heads': 12, 'd_ff': 3072, 'rope_theta': 10000.0}, 'training': True, '_parameters': {}, '_buffers': {}, '_non_persistent_buffers_set': set(), '_backward_pre_hooks': OrderedDict(), '_backward_hooks': OrderedDict(), '_is_full_backward_hook': None, '_forward_hooks': OrderedDict(), '_forward_hooks_with_kwargs': OrderedDict(), '_forward_hooks_always_called': OrderedDict(), '_forward_pre_hooks': OrderedDict(), '_forward_pre_hooks_with_kwargs': OrderedDict(), '_state_dict_hooks': OrderedDict(), '_state_dict_pre_hooks': OrderedDict(), '_load_state_dict_pre_hooks': OrderedDict(), '_load_state_dict_post_hooks': OrderedDict(), '_modules': {'token_embeddings': Embedding(vocab_size=10000, d=768), 'positional_encoder': RotaryEmbedding(context_length=2, dim/2=512), 'layers': ModuleList(
+  (0-11): 12 x TransformerBlock(
+    (attn): CausalMultiHeadSelfAttention(
+      (q_proj): Linear(d_out=768, d_in=768)
+      (k_proj): Linear(d_out=768, d_in=768)
+      (v_proj): Linear(d_out=768, d_in=768)
+      (output_proj): Linear(d_out=768, d_in=768)
+      (positional_encoder): RotaryEmbedding(context_length=2, dim/2=512)
+    )
+    (ffn): SwiGLU(
+      (w1): Linear(d_out=3072, d_in=768)
+      (w2): Linear(d_out=768, d_in=3072)
+      (w3): Linear(d_out=3072, d_in=768)
+    )
+    (ln1): RMSNorm(hidden_size=768, eps=1e-05)
+    (ln2): RMSNorm(hidden_size=768, eps=1e-05)
+  )
+), 'ln_final': RMSNorm(hidden_size=768, eps=1e-05), 'lm_head': Linear(d_out=10000, d_in=768)}, 'context_length': 512, 'd_model': 768}
+Forward times: [0.22616245599965623, 0.013464381999710895, 0.009860356999979558, 0.009592595999947662, 0.009723046000090108, 0.009576871999797731, 0.009798865999982809, 0.009601857000234304, 0.009744246000082057, 0.009899848999793903]
+Average forward time: 0.0317 seconds
+STD forward time: 0.0648 seconds
+
+Backward times: [0.10471763999976247, 0.01687812299996949, 0.016600714000105654, 0.01629995199982659, 0.01650097599986111, 0.01644179700042514, 0.0164267509999263, 0.01646972399976221, 0.016311339999901975, 0.016660124999816617]
+Average backward time: 0.0253 seconds
+STD backward time: 0.0265 seconds
+
+Optimizer times: [0.011450485999830562, 0.01061438700025974, 0.010817210999903182, 0.01064510700007304, 0.010552491999987978, 0.010706756999752542, 0.01068755100004637, 0.010700385000291135, 0.010645090999787499, 0.010725098999955662]
+Average optimizer step time: 0.0108 seconds
+STD optimizer step time: 0.0002 seconds
+
+
+Benchmark results for size: medium
+Model: BasicsTransformerLM, Config: {'config': {'vocab_size': 10000, 'context_length': 512, 'd_model': 1024, 'num_layers': 24, 'num_heads': 16, 'd_ff': 4096, 'rope_theta': 10000.0}, 'training': True, '_parameters': {}, '_buffers': {}, '_non_persistent_buffers_set': set(), '_backward_pre_hooks': OrderedDict(), '_backward_hooks': OrderedDict(), '_is_full_backward_hook': None, '_forward_hooks': OrderedDict(), '_forward_hooks_with_kwargs': OrderedDict(), '_forward_hooks_always_called': OrderedDict(), '_forward_pre_hooks': OrderedDict(), '_forward_pre_hooks_with_kwargs': OrderedDict(), '_state_dict_hooks': OrderedDict(), '_state_dict_pre_hooks': OrderedDict(), '_load_state_dict_pre_hooks': OrderedDict(), '_load_state_dict_post_hooks': OrderedDict(), '_modules': {'token_embeddings': Embedding(vocab_size=10000, d=1024), 'positional_encoder': RotaryEmbedding(context_length=2, dim/2=512), 'layers': ModuleList(
+  (0-23): 24 x TransformerBlock(
+    (attn): CausalMultiHeadSelfAttention(
+      (q_proj): Linear(d_out=1024, d_in=1024)
+      (k_proj): Linear(d_out=1024, d_in=1024)
+      (v_proj): Linear(d_out=1024, d_in=1024)
+      (output_proj): Linear(d_out=1024, d_in=1024)
+      (positional_encoder): RotaryEmbedding(context_length=2, dim/2=512)
+    )
+    (ffn): SwiGLU(
+      (w1): Linear(d_out=4096, d_in=1024)
+      (w2): Linear(d_out=1024, d_in=4096)
+      (w3): Linear(d_out=4096, d_in=1024)
+    )
+    (ln1): RMSNorm(hidden_size=1024, eps=1e-05)
+    (ln2): RMSNorm(hidden_size=1024, eps=1e-05)
+  )
+), 'ln_final': RMSNorm(hidden_size=1024, eps=1e-05), 'lm_head': Linear(d_out=10000, d_in=1024)}, 'context_length': 512, 'd_model': 1024}
+Forward times: [0.03417799099997865, 0.03260194499989666, 0.01923868800031414, 0.018557350999799382, 0.018777873999624717, 0.018691700999625027, 0.01866908300007708, 0.01866885799972806, 0.01875377499982278, 0.01865434700039259]
+Average forward time: 0.0217 seconds
+STD forward time: 0.0059 seconds
+
+Backward times: [0.05392000600022584, 0.0517859110000245, 0.05114437200018074, 0.05140661999985241, 0.05132989499998075, 0.051412045000233775, 0.05139275200008342, 0.051276330999826314, 0.05110672599994359, 0.05134728900020491]
+Average backward time: 0.0516 seconds
+STD backward time: 0.0008 seconds
+
+Optimizer times: [0.020106121000026178, 0.01904849299990019, 0.017580199999883916, 0.017663003000052413, 0.01742987300031018, 0.017157410999971034, 0.0173124259999895, 0.017077982000046177, 0.01754473600021811, 0.01702853699998741]
+Average optimizer step time: 0.0178 seconds
+STD optimizer step time: 0.0009 seconds
+
+
+Benchmark results for size: large
+Model: BasicsTransformerLM, Config: {'config': {'vocab_size': 10000, 'context_length': 512, 'd_model': 1280, 'num_layers': 36, 'num_heads': 20, 'd_ff': 5120, 'rope_theta': 10000.0}, 'training': True, '_parameters': {}, '_buffers': {}, '_non_persistent_buffers_set': set(), '_backward_pre_hooks': OrderedDict(), '_backward_hooks': OrderedDict(), '_is_full_backward_hook': None, '_forward_hooks': OrderedDict(), '_forward_hooks_with_kwargs': OrderedDict(), '_forward_hooks_always_called': OrderedDict(), '_forward_pre_hooks': OrderedDict(), '_forward_pre_hooks_with_kwargs': OrderedDict(), '_state_dict_hooks': OrderedDict(), '_state_dict_pre_hooks': OrderedDict(), '_load_state_dict_pre_hooks': OrderedDict(), '_load_state_dict_post_hooks': OrderedDict(), '_modules': {'token_embeddings': Embedding(vocab_size=10000, d=1280), 'positional_encoder': RotaryEmbedding(context_length=2, dim/2=512), 'layers': ModuleList(
+  (0-35): 36 x TransformerBlock(
+    (attn): CausalMultiHeadSelfAttention(
+      (q_proj): Linear(d_out=1280, d_in=1280)
+      (k_proj): Linear(d_out=1280, d_in=1280)
+      (v_proj): Linear(d_out=1280, d_in=1280)
+      (output_proj): Linear(d_out=1280, d_in=1280)
+      (positional_encoder): RotaryEmbedding(context_length=2, dim/2=512)
+    )
+    (ffn): SwiGLU(
+      (w1): Linear(d_out=5120, d_in=1280)
+      (w2): Linear(d_out=1280, d_in=5120)
+      (w3): Linear(d_out=5120, d_in=1280)
+    )
+    (ln1): RMSNorm(hidden_size=1280, eps=1e-05)
+    (ln2): RMSNorm(hidden_size=1280, eps=1e-05)
+  )
+), 'ln_final': RMSNorm(hidden_size=1280, eps=1e-05), 'lm_head': Linear(d_out=10000, d_in=1280)}, 'context_length': 512, 'd_model': 1280}
+Forward times: [0.050631264000003284, 0.05087628599994787, 0.047748477999903116, 0.04740296900035901, 0.047277421000217146, 0.047338575000139826, 0.047331917000065005, 0.04732942400005413, 0.047338392000256135, 0.04730383899959634]
+Average forward time: 0.0481 seconds
+STD forward time: 0.0014 seconds
+
+Backward times: [0.13494693400025426, 0.13564654600031645, 0.1353719590001674, 0.13523387199984427, 0.13515723299997262, 0.1353111620001073, 0.13516488899995238, 0.13533986700031164, 0.13461973800031046, 0.13521257499996864]
+Average backward time: 0.1352 seconds
+STD backward time: 0.0003 seconds
+
+Optimizer times: [0.03432843399968988, 0.033984266000061325, 0.03396002199997383, 0.03408688599984089, 0.03406704999997601, 0.034172740999565576, 0.033640594000189594, 0.03393307799979084, 0.033931915999801276, 0.03405655200003821]
+Average optimizer step time: 0.0340 seconds
+STD optimizer step time: 0.0002 seconds
+
+
+Benchmark results for size: xl
+Model: BasicsTransformerLM, Config: {'config': {'vocab_size': 10000, 'context_length': 512, 'd_model': 2560, 'num_layers': 32, 'num_heads': 32, 'd_ff': 10240, 'rope_theta': 10000.0}, 'training': True, '_parameters': {}, '_buffers': {}, '_non_persistent_buffers_set': set(), '_backward_pre_hooks': OrderedDict(), '_backward_hooks': OrderedDict(), '_is_full_backward_hook': None, '_forward_hooks': OrderedDict(), '_forward_hooks_with_kwargs': OrderedDict(), '_forward_hooks_always_called': OrderedDict(), '_forward_pre_hooks': OrderedDict(), '_forward_pre_hooks_with_kwargs': OrderedDict(), '_state_dict_hooks': OrderedDict(), '_state_dict_pre_hooks': OrderedDict(), '_load_state_dict_pre_hooks': OrderedDict(), '_load_state_dict_post_hooks': OrderedDict(), '_modules': {'token_embeddings': Embedding(vocab_size=10000, d=2560), 'positional_encoder': RotaryEmbedding(context_length=2, dim/2=512), 'layers': ModuleList(
+  (0-31): 32 x TransformerBlock(
+    (attn): CausalMultiHeadSelfAttention(
+      (q_proj): Linear(d_out=2560, d_in=2560)
+      (k_proj): Linear(d_out=2560, d_in=2560)
+      (v_proj): Linear(d_out=2560, d_in=2560)
+      (output_proj): Linear(d_out=2560, d_in=2560)
+      (positional_encoder): RotaryEmbedding(context_length=2, dim/2=512)
+    )
+    (ffn): SwiGLU(
+      (w1): Linear(d_out=10240, d_in=2560)
+      (w2): Linear(d_out=2560, d_in=10240)
+      (w3): Linear(d_out=10240, d_in=2560)
+    )
+    (ln1): RMSNorm(hidden_size=2560, eps=1e-05)
+    (ln2): RMSNorm(hidden_size=2560, eps=1e-05)
+  )
+), 'ln_final': RMSNorm(hidden_size=2560, eps=1e-05), 'lm_head': Linear(d_out=10000, d_in=2560)}, 'context_length': 512, 'd_model': 2560}
+Forward times: [0.13067384399982984, 0.12940103500022815, 0.1275629110000409, 0.12762822600006984, 0.1276089969996974, 0.1275972839998758, 0.1330911729996842, 0.12753629299959357, 0.12752485000009983, 0.12759814499986533]
+Average forward time: 0.1286 seconds
+STD forward time: 0.0018 seconds
+
+Backward times: [0.36957668400009425, 0.37036145999991277, 0.3709372819998862, 0.3709884630002307, 0.3708989609999662, 0.37064087399994605, 0.3702362560002257, 0.37124968399984937, 0.3716412940002556, 0.3711427769999318]
+Average backward time: 0.3708 seconds
+STD backward time: 0.0006 seconds
+
+Optimizer times: [0.21564028200009489, 0.2111699519996364, 0.21101313899998786, 0.21063703900017572, 0.21180846100014605, 0.2109468549997473, 0.2106596109997554, 0.21142297799997323, 0.2109893510000802, 0.2105798259999574]
+Average optimizer step time: 0.2115 seconds
+STD optimizer step time: 0.0014 seconds
+
+
