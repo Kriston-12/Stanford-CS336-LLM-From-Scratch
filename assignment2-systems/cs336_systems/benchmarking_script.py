@@ -7,14 +7,17 @@ import argparse
 import numpy as np
 from timeit import default_timer as timer
 import torch
+import os
 
 def run_model_with_warmup(
+    result_file: str,
     model: BasicsTransformerLM,
     data: npt.NDArray, 
     batch_size: int = 32, 
     seq_len: int = 128, 
     device: str = "cuda",
     warmup_steps: int = 5,
+    benchmark_steps: int = 10,
 ):
     model.to(device)
     optimizer = AdamW(model.parameters(), lr=1e-4)
@@ -32,7 +35,7 @@ def run_model_with_warmup(
     forward_times = []
     backward_times = []
     optimizer_times = []
-    for _ in range(100):  # Run for 100 iterations
+    for _ in range(benchmark_steps):  # Run for benchmark_steps iterations
         inputs, targets = get_batch(data, batch_size, seq_len, device)
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
@@ -56,10 +59,17 @@ def run_model_with_warmup(
         optimizer_times.append(timer_end - timer_start)
         torch.cuda.synchronize()  
         print(f"Optimizer step time: {optimizer_times[-1]:.4f} seconds")
-
-    print(f"Average forward time: {np.mean(forward_times):.4f} seconds")
-    print(f"Average backward time: {np.mean(backward_times):.4f} seconds")
-    print(f"Average optimizer step time: {np.mean(optimizer_times):.4f} seconds")
+    
+    with open(result_file, "a") as f:
+        f.write(f"Benchmark results for model: {model.__class__.__name__}\n")
+        f.write(f"Model: {model.__class__.__name__}, Config: {model.__dict__}\n")
+        f.write(f"Forward times: {forward_times}\n")
+        f.write(f"Average forward time: {np.mean(forward_times):.4f} seconds\n")
+        f.write(f"Backward times: {backward_times}\n")
+        f.write(f"Average backward time: {np.mean(backward_times):.4f} seconds\n")
+        f.write(f"Optimizer times: {optimizer_times}\n")
+        f.write(f"Average optimizer step time: {np.mean(optimizer_times):.4f} seconds\n")
+        f.write("\n"*2)
 
 
 def default_model_configs() -> list[dict]:
@@ -84,8 +94,11 @@ if __name__ == "__main__":
 
     # dummy dataset for benchmarking purposes
     dataset = np.random.randint(0, 10000, size=(1000000,), dtype=np.int64)  # 1 million tokens
-
     vocab_size = args.vocab_size if args.vocab_size is not None else int(dataset.max()) + 1
+    
+    bench_mark_file = f"Warmup_{args.warmup_steps}.txt"
+    bench_mark_dir = os.path.join(os.path.dirname(__file__), "benchmark_results")
+    os.makedirs(bench_mark_dir, exist_ok=True)
 
     for config in default_model_configs():
         print(f"Testing model: {config['name']}")
@@ -97,4 +110,12 @@ if __name__ == "__main__":
             num_heads=config["num_heads"],
             context_length=config["context_length"]
         )
-        run_model_with_warmup(model, dataset, args.batch_size, args.seq_len, args.device, args.warmup_steps)
+        run_model_with_warmup(
+            result_file=os.path.join(bench_mark_dir, bench_mark_file),
+            model = model, 
+            data=dataset,
+            batch_size=args.batch_size, 
+            seq_len=args.seq_len, 
+            device=args.device, 
+            warmup_steps=args.warmup_steps, 
+            benchmark_steps=10)
