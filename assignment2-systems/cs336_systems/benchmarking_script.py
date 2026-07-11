@@ -1,12 +1,17 @@
 from cs336_basics.data import get_batch
+import cs336_basics.model as basics_model
 from cs336_basics.model import BasicsTransformerLM
 from cs336_basics.nn_utils import cross_entropy
 from cs336_basics.optimizer import AdamW
+from cs336_systems.annotated_impl import scaled_dot_product_attention as annotated_scaled_dot_product_attention
 import numpy.typing as npt
 import argparse
 import numpy as np
 from timeit import default_timer as timer
 import torch
+from typing import Callable, TypeVar
+
+T = TypeVar("T")
 
 def run_model_with_warmup(
     model: BasicsTransformerLM,
@@ -15,7 +20,28 @@ def run_model_with_warmup(
     seq_len: int = 128, 
     device: str = "cuda",
     warmup_steps: int = 5,
+    cuda_profiler_api: bool = False,
+    wall_time: bool = False,
+    write_to_file: bool = False,
 ):
+    def timed_step(name: str, fn: Callable[[], T], times: list[float]) -> T:
+        if not wall_time:
+            return fn()
+
+        if device == "cuda":
+            torch.cuda.synchronize()
+
+        timer_start = timer()
+        result = fn()
+
+        if device == "cuda":
+            torch.cuda.synchronize()
+
+        elapsed = timer() - timer_start
+        times.append(elapsed)
+        print(f"{name} time: {elapsed:.4f} seconds")
+        return result
+
     model.to(device)
     optimizer = AdamW(model.parameters(), lr=1e-4)
 
@@ -29,37 +55,30 @@ def run_model_with_warmup(
         optimizer.step()
 
     torch.cuda.synchronize()
+    if cuda_profiler_api:
+        torch.cuda.profiler.start()
+
     forward_times = []
     backward_times = []
     optimizer_times = []
-    for _ in range(100):  # Run for 100 iterations
+    for _ in range(10):  # Run for 10 iterations
         inputs, targets = get_batch(data, batch_size, seq_len, device)
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
-        timer_start = timer()
-        outputs = model(inputs)
-        timer_end = timer()
-        forward_times.append(timer_end - timer_start)
-        torch.cuda.synchronize()  
-        print(f"Forward time: {forward_times[-1]:.4f} seconds")
+        outputs = timed_step("Forward", lambda: model(inputs), forward_times)
         loss = cross_entropy(outputs.view(-1, outputs.size(-1)), targets.view(-1))
         
-        timer_start = timer()
-        loss.backward()
-        timer_end = timer()
-        backward_times.append(timer_end - timer_start)
-        print(f"Backward time: {backward_times[-1]:.4f} seconds")
-        torch.cuda.synchronize()  
-        timer_start = timer()
-        optimizer.step()
-        timer_end = timer()
-        optimizer_times.append(timer_end - timer_start)
-        torch.cuda.synchronize()  
-        print(f"Optimizer step time: {optimizer_times[-1]:.4f} seconds")
+        timed_step("Backward", lambda: loss.backward(), backward_times)
+        timed_step("Optimizer step", lambda: optimizer.step(), optimizer_times)
 
-    print(f"Average forward time: {np.mean(forward_times):.4f} seconds")
-    print(f"Average backward time: {np.mean(backward_times):.4f} seconds")
-    print(f"Average optimizer step time: {np.mean(optimizer_times):.4f} seconds")
+    if wall_time:
+        print(f"Average forward time: {np.mean(forward_times):.4f} seconds")
+        print(f"Average backward time: {np.mean(backward_times):.4f} seconds")
+        print(f"Average optimizer step time: {np.mean(optimizer_times):.4f} seconds")
+
+    if cuda_profiler_api:
+        torch.cuda.synchronize()
+        torch.cuda.profiler.stop()
 
 
 def default_model_configs() -> list[dict]:
@@ -80,7 +99,13 @@ if __name__ == "__main__":
     argparser.add_argument("-dev", "--device", type=str, default="cuda", help="Device to run the benchmark on (e.g., 'cuda' or 'cpu')")
     argparser.add_argument("-w", "--warmup_steps", type=int, default=5, help="Number of warmup steps")
     argparser.add_argument("--vocab_size", type=int, default=None, help="Vocabulary size. If omitted, inferred from data.")
+    argparser.add_argument("--annotated_attention", action="store_true", help="Use the NVTX-annotated attention implementation.")
+    argparser.add_argument("--cuda_profiler_api", action="store_true", help="Capture only the measured region when using Nsight Systems with cudaProfilerApi.")
+    argparser.add_argument("--wall_time", action="store_true", help="Print Python wall-clock timings for forward, backward, and optimizer steps.")
     args = argparser.parse_args()
+
+    if args.annotated_attention:
+        basics_model.scaled_dot_product_attention = annotated_scaled_dot_product_attention
 
     # dummy dataset for benchmarking purposes
     dataset = np.random.randint(0, 10000, size=(1000000,), dtype=np.int64)  # 1 million tokens
@@ -97,4 +122,13 @@ if __name__ == "__main__":
             num_heads=config["num_heads"],
             context_length=config["context_length"]
         )
-        run_model_with_warmup(model, dataset, args.batch_size, args.seq_len, args.device, args.warmup_steps)
+        run_model_with_warmup(
+            model,
+            dataset,
+            args.batch_size,
+            args.seq_len,
+            args.device,
+            args.warmup_steps,
+            args.cuda_profiler_api,
+            args.wall_time,
+        )
