@@ -12,8 +12,11 @@ import torch
 from typing import Callable, TypeVar
 
 T = TypeVar("T")
+import os
 
 def run_model_with_warmup(
+    size: str,
+    result_file: str,
     model: BasicsTransformerLM,
     data: npt.NDArray, 
     batch_size: int = 32, 
@@ -23,6 +26,7 @@ def run_model_with_warmup(
     cuda_profiler_api: bool = False,
     wall_time: bool = False,
     write_to_file: bool = False,
+    benchmark_steps: int = 10,
 ):
     def timed_step(name: str, fn: Callable[[], T], times: list[float]) -> T:
         if not wall_time:
@@ -61,7 +65,7 @@ def run_model_with_warmup(
     forward_times = []
     backward_times = []
     optimizer_times = []
-    for _ in range(10):  # Run for 10 iterations
+    for _ in range(benchmark_steps):  # Run for benchmark_steps iterations
         inputs, targets = get_batch(data, batch_size, seq_len, device)
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
@@ -71,14 +75,17 @@ def run_model_with_warmup(
         timed_step("Backward", lambda: loss.backward(), backward_times)
         timed_step("Optimizer step", lambda: optimizer.step(), optimizer_times)
 
-    if wall_time:
-        print(f"Average forward time: {np.mean(forward_times):.4f} seconds")
-        print(f"Average backward time: {np.mean(backward_times):.4f} seconds")
-        print(f"Average optimizer step time: {np.mean(optimizer_times):.4f} seconds")
-
     if cuda_profiler_api:
         torch.cuda.synchronize()
         torch.cuda.profiler.stop()
+    
+    if write_to_file:
+        with open(result_file, "a") as f:
+            f.write(f"Model size: {size}\n")
+            f.write(f"Average forward time: {np.mean(forward_times):.4f} seconds\n")
+            f.write(f"Average backward time: {np.mean(backward_times):.4f} seconds\n")
+            f.write(f"Average optimizer step time: {np.mean(optimizer_times):.4f} seconds\n")
+            f.write("\n\n")
 
 
 def default_model_configs() -> list[dict]:
@@ -88,16 +95,16 @@ def default_model_configs() -> list[dict]:
         {"name": "medium", "d_model": 1024, "d_ff": 4096, "num_layers": 24, "num_heads": 16, "context_length": 512},
         {"name": "large", "d_model": 1280, "d_ff": 5120, "num_layers": 36, "num_heads": 20, "context_length": 512},
         {"name": "xl", "d_model": 2560, "d_ff": 10240, "num_layers": 32, "num_heads": 32, "context_length": 512},
-        {"name": "10B", "d_model": 4608, "d_ff": 12288, "num_layers": 50, "num_heads": 36, "context_length": 512},
+        # {"name": "10B", "d_model": 4608, "d_ff": 12288, "num_layers": 50, "num_heads": 36, "context_length": 512},
     ]
 
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser(description="Benchmarking script for BasicsTransformerLM")
     argparser.add_argument("-d", "--data_path", type=str, help="Path to the dataset (text file)")
-    argparser.add_argument("-b", "--batch_size", type=int, default=32, help="Batch size for training")
+    argparser.add_argument("-b", "--batch_size", type=int, default=16, help="Batch size for training")
     argparser.add_argument("-s", "--seq_len", type=int, default=128, help="Sequence length for training")
     argparser.add_argument("-dev", "--device", type=str, default="cuda", help="Device to run the benchmark on (e.g., 'cuda' or 'cpu')")
-    argparser.add_argument("-w", "--warmup_steps", type=int, default=5, help="Number of warmup steps")
+    argparser.add_argument("-w", "--warmup_steps", type=int, default=2, help="Number of warmup steps")
     argparser.add_argument("--vocab_size", type=int, default=None, help="Vocabulary size. If omitted, inferred from data.")
     argparser.add_argument("--annotated_attention", action="store_true", help="Use the NVTX-annotated attention implementation.")
     argparser.add_argument("--cuda_profiler_api", action="store_true", help="Capture only the measured region when using Nsight Systems with cudaProfilerApi.")
@@ -109,8 +116,11 @@ if __name__ == "__main__":
 
     # dummy dataset for benchmarking purposes
     dataset = np.random.randint(0, 10000, size=(1000000,), dtype=np.int64)  # 1 million tokens
-
     vocab_size = args.vocab_size if args.vocab_size is not None else int(dataset.max()) + 1
+    
+    bench_mark_file = f"Warmup{args.warmup_steps}_Batch{args.batch_size}.txt"
+    bench_mark_dir = os.path.join(os.path.dirname(__file__), "benchmark_results")
+    os.makedirs(bench_mark_dir, exist_ok=True)
 
     for config in default_model_configs():
         print(f"Testing model: {config['name']}")
@@ -123,12 +133,14 @@ if __name__ == "__main__":
             context_length=config["context_length"]
         )
         run_model_with_warmup(
-            model,
-            dataset,
-            args.batch_size,
-            args.seq_len,
-            args.device,
-            args.warmup_steps,
-            args.cuda_profiler_api,
-            args.wall_time,
+            size = config["name"],
+            result_file = os.path.join(bench_mark_dir, bench_mark_file),
+            model = model,
+            data = dataset,
+            batch_size = args.batch_size,
+            seq_len = args.seq_len,
+            device = args.device,
+            warmup_steps = args.warmup_steps,
+            cuda_profiler_api = args.cuda_profiler_api,
+            wall_time = args.wall_time,
         )
