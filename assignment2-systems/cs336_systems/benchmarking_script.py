@@ -65,6 +65,7 @@ def run_model_with_warmup(
     forward_times = []
     backward_times = []
     optimizer_times = []
+    torch.cuda.reset_peak_memory_stats()
     for _ in range(benchmark_steps):  # Run for benchmark_steps iterations
         inputs, targets = get_batch(data, batch_size, seq_len, device)
         inputs, targets = inputs.to(device), targets.to(device)
@@ -75,8 +76,10 @@ def run_model_with_warmup(
         timed_step("Backward", lambda: loss.backward(), backward_times)
         timed_step("Optimizer step", lambda: optimizer.step(), optimizer_times)
 
+    torch.cuda.synchronize()
+    peak_bytes = torch.cuda.max_memory_allocated()
+
     if cuda_profiler_api:
-        torch.cuda.synchronize()
         torch.cuda.profiler.stop()
     
     if write_to_file:
@@ -85,7 +88,15 @@ def run_model_with_warmup(
             f.write(f"Average forward time: {np.mean(forward_times):.4f} seconds\n")
             f.write(f"Average backward time: {np.mean(backward_times):.4f} seconds\n")
             f.write(f"Average optimizer step time: {np.mean(optimizer_times):.4f} seconds\n")
+            f.write(f"Peak memory usage: {peak_bytes / (1024 ** 2):.2f} MB\n")
             f.write("\n\n")
+    else:
+        print(f"Model size: {size}")
+        print(f"Average forward time: {np.mean(forward_times):.4f} seconds")
+        print(f"Average backward time: {np.mean(backward_times):.4f} seconds")
+        print(f"Average optimizer step time: {np.mean(optimizer_times):.4f} seconds")
+        print(f"Peak memory usage: {peak_bytes / (1024 ** 2):.2f} MB")
+        print("\n\n")
 
 
 def default_model_configs() -> list[dict]:
@@ -109,6 +120,7 @@ if __name__ == "__main__":
     argparser.add_argument("--annotated_attention", action="store_true", help="Use the NVTX-annotated attention implementation.")
     argparser.add_argument("--cuda_profiler_api", action="store_true", help="Capture only the measured region when using Nsight Systems with cudaProfilerApi.")
     argparser.add_argument("--wall_time", action="store_true", help="Print Python wall-clock timings for forward, backward, and optimizer steps.")
+    argparser.add_argument("--model_size", type=str, choices=["small", "medium", "large", "xl", "all"], default="all", help="Model size to benchmark.")
     args = argparser.parse_args()
 
     if args.annotated_attention:
@@ -123,6 +135,8 @@ if __name__ == "__main__":
     os.makedirs(bench_mark_dir, exist_ok=True)
 
     for config in default_model_configs():
+        if args.model_size != "all" and config["name"] != args.model_size:
+            continue
         print(f"Testing model: {config['name']}")
         model = BasicsTransformerLM(
             vocab_size=vocab_size,
