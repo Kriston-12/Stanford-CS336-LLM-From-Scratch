@@ -1,0 +1,57 @@
+# medium_seq128 (corrected, with --cuda_profiler_api added)
+sudo "$(command -v nsys)" profile \
+  -o ../profiles/medium_seq128 --capture-range=cudaProfilerApi --capture-range-end=stop --force-overwrite=true \
+  --trace=cuda,cudnn,cublas,osrt,nvtx \
+  --pytorch=functions-trace,autograd-shapes-nvtx \
+  --cudabacktrace=all \
+  --python-backtrace=cuda \
+  --gpu-metrics-devices=0 \
+  "$(command -v python)" benchmarking_script.py \
+  --model_size medium --seq_len 128 --batch_size 16 --warmup_steps 2 --cuda_profiler_api --annotated_attention
+
+# medium_seq512
+sudo "$(command -v nsys)" profile \
+  -o ../profiles/medium_seq512 --capture-range=cudaProfilerApi --capture-range-end=stop --force-overwrite=true \
+  --trace=cuda,cudnn,cublas,osrt,nvtx \
+  --pytorch=functions-trace,autograd-shapes-nvtx \
+  --cudabacktrace=all \
+  --python-backtrace=cuda \
+  --gpu-metrics-devices=0 \
+  "$(command -v python)" benchmarking_script.py \
+  --model_size medium --seq_len 512 --batch_size 16 --warmup_steps 2 --cuda_profiler_api --annotated_attention
+
+# large_seq128
+sudo "$(command -v nsys)" profile \
+  -o ../profiles/large_seq128 --capture-range=cudaProfilerApi --capture-range-end=stop --force-overwrite=true \
+  --trace=cuda,cudnn,cublas,osrt,nvtx \
+  --pytorch=functions-trace,autograd-shapes-nvtx \
+  --cudabacktrace=all \
+  --python-backtrace=cuda \
+  --gpu-metrics-devices=0 \
+  "$(command -v python)" benchmarking_script.py \
+  --model_size large --seq_len 128 --batch_size 16 --warmup_steps 2 --cuda_profiler_api --annotated_attention
+
+# large_seq256
+sudo "$(command -v nsys)" profile \
+  -o ../profiles/large_seq256 --capture-range=cudaProfilerApi --capture-range-end=stop --force-overwrite=true \
+  --trace=cuda,cudnn,cublas,osrt,nvtx \
+  --pytorch=functions-trace,autograd-shapes-nvtx \
+  --cudabacktrace=all \
+  --python-backtrace=cuda \
+  --gpu-metrics-devices=0 \
+  "$(command -v python)" benchmarking_script.py \
+  --model_size large --seq_len 256 --batch_size 16 --warmup_steps 2 --cuda_profiler_api --annotated_attention
+
+# all-models-run-seq128
+sudo "$(command -v nsys)" profile \
+  -o ../profiles/all-models-run-seq128 --capture-range=cudaProfilerApi --capture-range-end=stop --force-overwrite=true \
+  --trace=cuda,cudnn,cublas,osrt,nvtx \
+  --pytorch=functions-trace,autograd-shapes-nvtx \
+  --cudabacktrace=all \
+  --python-backtrace=cuda \
+  --gpu-metrics-devices=0 \
+  "$(command -v python)" benchmarking_script.py \
+  --model_size all --seq_len 128 --batch_size 16 --warmup_steps 2 --cuda_profiler_api --annotated_attention
+
+# 注意需要在每个command末尾加上 --annotated_attention
+# 否则nsys command产出的nsys-rep文件在ui中是不会包括annotated_impl中的nvtx的部分的，
