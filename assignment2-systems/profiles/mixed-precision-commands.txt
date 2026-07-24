@@ -1,0 +1,4 @@
+# command using mixed precision for xl
+uv run benchmarking_script.py \
+  --model_size xl --seq_len 128 --batch_size 16 --warmup_steps 2 --cuda_profiler_api --annotated_attention \
+  --mixed_precision
