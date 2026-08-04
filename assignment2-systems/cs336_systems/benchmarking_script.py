@@ -27,6 +27,7 @@ def run_model_with_warmup(
     wall_time: bool = False,
     write_to_file: bool = False,
     benchmark_steps: int = 10,
+    mixed_precision: bool = False
 ):
     def timed_step(name: str, fn: Callable[[], T], times: list[float]) -> T:
         if not wall_time:
@@ -66,18 +67,22 @@ def run_model_with_warmup(
     backward_times = []
     optimizer_times = []
     torch.cuda.reset_peak_memory_stats()
-    for _ in range(benchmark_steps):  # Run for benchmark_steps iterations
-        inputs, targets = get_batch(data, batch_size, seq_len, device)
-        inputs, targets = inputs.to(device), targets.to(device)
-        optimizer.zero_grad()
-        outputs = timed_step("Forward", lambda: model(inputs), forward_times)
-        loss = cross_entropy(outputs.view(-1, outputs.size(-1)), targets.view(-1))
-        
-        timed_step("Backward", lambda: loss.backward(), backward_times)
-        timed_step("Optimizer step", lambda: optimizer.step(), optimizer_times)
+    torch.cuda.memory._record_memory_history(max_entries=1000000)
+    with torch.autocast(device_type=device, enabled=mixed_precision):
+        for _ in range(benchmark_steps):  # Run for benchmark_steps iterations
+            inputs, targets = get_batch(data, batch_size, seq_len, device)
+            inputs, targets = inputs.to(device), targets.to(device)
+            optimizer.zero_grad()
+            outputs = timed_step("Forward", lambda: model(inputs), forward_times)
+            loss = cross_entropy(outputs.view(-1, outputs.size(-1)), targets.view(-1))
+            
+            timed_step("Backward", lambda: loss.backward(), backward_times)
+            timed_step("Optimizer step", lambda: optimizer.step(), optimizer_times)
 
     torch.cuda.synchronize()
     peak_bytes = torch.cuda.max_memory_allocated()
+    torch.cuda.memory._dump_snapshot("memory_snapshot.pickle")
+    torch.cuda.memory._record_memory_history(enabled=None)
 
     if cuda_profiler_api:
         torch.cuda.profiler.stop()
@@ -121,6 +126,7 @@ if __name__ == "__main__":
     argparser.add_argument("--cuda_profiler_api", action="store_true", help="Capture only the measured region when using Nsight Systems with cudaProfilerApi.")
     argparser.add_argument("--wall_time", action="store_true", help="Print Python wall-clock timings for forward, backward, and optimizer steps.")
     argparser.add_argument("--model_size", type=str, choices=["small", "medium", "large", "xl", "all"], default="all", help="Model size to benchmark.")
+    argparser.add_argument("--mixed_precision", action="store_true", help="Use mixed precision training (FP16).")
     args = argparser.parse_args()
 
     if args.annotated_attention:
@@ -156,5 +162,6 @@ if __name__ == "__main__":
             device = args.device,
             warmup_steps = args.warmup_steps,
             cuda_profiler_api = args.cuda_profiler_api,
+            mixed_precision = args.mixed_precision,
             wall_time = args.wall_time,
         )
